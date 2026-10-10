@@ -359,6 +359,12 @@ func (c *Client) TogglePause() error {
 	return err
 }
 
+// Unpause ensures playback is unpaused.
+func (c *Client) Unpause() error {
+	_, err := c.sendCommand("set_property", "pause", false)
+	return err
+}
+
 // Next plays the next track.
 func (c *Client) Next() error {
 	_, err := c.sendCommand("playlist-next")

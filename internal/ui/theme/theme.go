@@ -221,3 +221,19 @@ func bottomBorder(footer string, width int, lineStyle lipgloss.Style) string {
 	b.WriteString(lineStyle.Render(strings.Repeat("─", trailDashes) + "╯"))
 	return b.String()
 }
+
+// TruncateLine guarantees a string fits within maxWidth without soft-wrapping.
+// If it exceeds maxWidth, it truncates the string cleanly.
+func TruncateLine(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) > maxWidth {
+		if maxWidth > 1 {
+			return string(r[:maxWidth-1]) + "…"
+		}
+		return string(r[:maxWidth])
+	}
+	return s
+}

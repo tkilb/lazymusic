@@ -22,6 +22,7 @@ const (
 	ModalHelp
 	ModalSearch
 	ModalTagEdit
+	ModalAddDir
 )
 
 // Model represents the main Bubble Tea model for lazymusic.
@@ -33,6 +34,9 @@ type Model struct {
 	height        int
 	activePanel   panels.PanelID
 	leftPanels    []panels.Panel
+	playlistsPanel *panels.PlaylistsPanel
+	libraryPanel   *panels.LibraryPanel
+	fileBrowser    *panels.FileBrowserPanel
 	queuePanel    panels.Panel
 	statusPanel   *panels.StatusPanel
 	lastLeftFocus panels.PanelID
@@ -41,6 +45,7 @@ type Model struct {
 	modalMode    ModalMode
 	helpScroll   int
 	searchBuffer string
+	addDirBuffer string
 	tagTrackPath string
 	tagTitle     string
 	tagArtist    string
@@ -59,16 +64,22 @@ type LibraryScanMsg struct {
 
 // NewModel initializes the TUI model.
 func NewModel(cfg *config.Config, pClient *player.Client, storage *library.Storage) *Model {
+	plPanel := panels.NewPlaylistsPanel(cfg.PlaylistsDir)
+	libPanel := panels.NewLibraryPanel(cfg, storage)
+	fbPanel := panels.NewFileBrowserPanel("")
 	m := &Model{
-		cfg:           cfg,
-		player:        pClient,
-		storage:       storage,
-		activePanel:   panels.PanelLibrary,
-		lastLeftFocus: panels.PanelLibrary,
+		cfg:            cfg,
+		player:         pClient,
+		storage:        storage,
+		activePanel:    panels.PanelPlaylists,
+		lastLeftFocus:  panels.PanelPlaylists,
+		playlistsPanel: plPanel,
+		libraryPanel:   libPanel,
+		fileBrowser:    fbPanel,
 		leftPanels: []panels.Panel{
-			panels.NewLibraryPanel(storage),
-			panels.NewPlaylistsPanel(cfg.PlaylistsDir),
-			panels.NewFileBrowserPanel(""),
+			plPanel,
+			fbPanel,
+			libPanel,
 		},
 		queuePanel:  panels.NewQueuePanel(),
 		statusPanel: panels.NewStatusPanel(),
@@ -104,11 +115,11 @@ func (m *Model) statusBindings() []statusbar.Binding {
 	switch m.activePanel {
 	case panels.PanelLibrary:
 		local = []statusbar.Binding{
-			{Key: "Enter", Label: "play"},
-			{Key: "a", Label: "queue"},
+			{Key: "Enter", Label: "open in files"},
+			{Key: "a", Label: "add dir"},
+			{Key: "d", Label: "remove dir"},
+			{Key: "r", Label: "rescan"},
 			{Key: "/", Label: "filter"},
-			{Key: "e", Label: "tag edit"},
-			{Key: "[/]", Label: "tabs"},
 		}
 	case panels.PanelPlaylists:
 		local = []statusbar.Binding{
@@ -119,6 +130,7 @@ func (m *Model) statusBindings() []statusbar.Binding {
 		local = []statusbar.Binding{
 			{Key: "→/Enter", Label: "open"},
 			{Key: "←", Label: "back"},
+			{Key: "A", Label: "add to lib"},
 			{Key: "a", Label: "queue"},
 		}
 	case panels.PanelQueue:
@@ -142,11 +154,11 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 	switch m.activePanel {
 	case panels.PanelLibrary:
 		return []statusbar.Binding{
-			{Key: "Enter", Label: "play selected track immediately"},
-			{Key: "a", Label: "append selected track to queue"},
-			{Key: "/", Label: "open live fuzzy filter search"},
-			{Key: "e", Label: "edit ID3v2 metadata tags for selected track"},
-			{Key: "[ / ]", Label: "switch sub-tab (Dirs / Artists / Albums / Tracks)"},
+			{Key: "Enter", Label: "open selected directory in File Browser"},
+			{Key: "a", Label: "add new music directory to library"},
+			{Key: "d", Label: "remove selected directory from library"},
+			{Key: "r", Label: "rescan audio files in library"},
+			{Key: "/", Label: "filter music directories"},
 		}
 	case panels.PanelPlaylists:
 		return []statusbar.Binding{
@@ -157,6 +169,7 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 		return []statusbar.Binding{
 			{Key: "→ / Enter", Label: "enter directory or play selected audio file"},
 			{Key: "←", Label: "go back to previous directory (Yazi-style)"},
+			{Key: "A", Label: "add current directory to Library Music Dirs"},
 			{Key: "a", Label: "append selected audio file to queue"},
 		}
 	case panels.PanelQueue:
@@ -175,7 +188,7 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 
 func (m *Model) helpNavigationBindings() []statusbar.Binding {
 	return []statusbar.Binding{
-		{Key: "0-3", Label: "jump directly to panel (0: Queue, 1: Lib, 2: Playlists, 3: Files)"},
+		{Key: "0-3", Label: "jump directly to panel (0: Queue, 1: Playlists, 2: Files, 3: Dirs)"},
 		{Key: "Tab / Shift+Tab", Label: "cycle panels clockwise / counter-clockwise"},
 		{Key: "↑ / ↓", Label: "navigate items in current panel"},
 	}
@@ -184,12 +197,12 @@ func (m *Model) helpNavigationBindings() []statusbar.Binding {
 func (m *Model) helpSections() []helppopup.Section {
 	sections := make([]helppopup.Section, 0, 3)
 	if local := m.helpLocalBindings(); len(local) > 0 {
-		panelName := "Library"
+		panelName := "Playlists"
 		switch m.activePanel {
-		case panels.PanelPlaylists:
-			panelName = "Playlists"
 		case panels.PanelFileBrowser:
-			panelName = "File Browser"
+			panelName = "Files"
+		case panels.PanelLibrary:
+			panelName = "Dirs"
 		case panels.PanelQueue:
 			panelName = "Queue"
 		}
@@ -270,8 +283,8 @@ func (m *Model) currentPanel() panels.Panel {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case LibraryScanMsg:
-		if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
-			lib.Refresh()
+		if m.libraryPanel != nil {
+			m.libraryPanel.Refresh()
 		}
 		return m, nil
 
@@ -329,83 +342,115 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "e":
-			// Open tag editor if on a track in Library or Queue
-			if m.activePanel == panels.PanelLibrary {
-				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
-					if track, ok := lib.SelectedTrack(); ok {
+			// Open tag editor if on a track in Queue
+			if m.activePanel == panels.PanelQueue {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+					if _, item, ok := q.SelectedTrack(); ok {
 						m.modalMode = ModalTagEdit
-						m.tagTrackPath = track.Path
-						m.tagTitle = track.Title
-						m.tagArtist = track.Artist
-						m.tagAlbum = track.Album
+						m.tagTrackPath = item.Filename
+						m.tagTitle = item.Title
+						m.tagArtist = ""
+						m.tagAlbum = ""
 						m.tagFieldIdx = 0
 					}
 				}
 			}
 			return m, nil
 
-		// Enter: Play track immediately, open folder, or load playlist
+		// Enter: Open directory in File Browser, load playlist, or play track
 		case "enter":
-			if m.activePanel == panels.PanelLibrary {
-				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
-					if track, found := lib.SelectedTrack(); found && m.player != nil {
-						_ = m.player.LoadFile(track.Path, "replace")
+			if m.activePanel == panels.PanelLibrary && m.libraryPanel != nil {
+				if dir, found := m.libraryPanel.SelectedDir(); found {
+					// Jump to File Browser and open this directory
+					if m.fileBrowser != nil {
+						m.fileBrowser.ReadDir(dir)
 					}
+					m.activePanel = panels.PanelFileBrowser
+					m.lastLeftFocus = panels.PanelFileBrowser
+					m.updateFocus()
+					m.updateStatusBar()
+					m.recalculateLayout()
 				}
-			} else if m.activePanel == panels.PanelPlaylists {
-				if pl, ok := m.leftPanels[1].(*panels.PlaylistsPanel); ok {
-					if item, found := pl.SelectedPlaylist(); found && m.player != nil {
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				if item, found := m.playlistsPanel.SelectedPlaylist(); found && m.player != nil {
+					_ = m.player.LoadFile(item.Path, "replace")
+					_ = m.player.Unpause()
+				}
+			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
+				if !m.fileBrowser.Enter() {
+					if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
 						_ = m.player.LoadFile(item.Path, "replace")
-					}
-				}
-			} else if m.activePanel == panels.PanelFileBrowser {
-				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
-					if !fb.Enter() {
-						if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
-							_ = m.player.LoadFile(item.Path, "replace")
-						}
+						_ = m.player.Unpause()
 					}
 				}
 			} else if m.activePanel == panels.PanelQueue {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok && m.player != nil {
 					if idx, _, found := q.SelectedTrack(); found {
 						_ = m.player.PlayIndex(idx)
+						_ = m.player.Unpause()
 					}
 				}
 			}
 			return m, nil
 
-		// a: Append to queue
+		// a: Add directory (in Library) or append to queue (in Playlists / File Browser)
 		case "a":
 			if m.activePanel == panels.PanelLibrary {
-				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
-					if track, found := lib.SelectedTrack(); found && m.player != nil {
-						_ = m.player.LoadFile(track.Path, "append")
-					}
+				m.modalMode = ModalAddDir
+				m.addDirBuffer = ""
+				return m, nil
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				if item, found := m.playlistsPanel.SelectedPlaylist(); found && m.player != nil {
+					_ = m.player.LoadFile(item.Path, "append")
 				}
-			} else if m.activePanel == panels.PanelPlaylists {
-				if pl, ok := m.leftPanels[1].(*panels.PlaylistsPanel); ok {
-					if item, found := pl.SelectedPlaylist(); found && m.player != nil {
-						_ = m.player.LoadFile(item.Path, "append")
-					}
-				}
-			} else if m.activePanel == panels.PanelFileBrowser {
-				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
-					if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
-						_ = m.player.LoadFile(item.Path, "append")
-					}
+			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
+				if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
+					_ = m.player.LoadFile(item.Path, "append")
 				}
 			}
 			return m, nil
 
-		// d: Remove selected track from queue
+		// A: Add directory in File Browser to Library Music Dirs
+		case "A":
+			if m.activePanel == panels.PanelFileBrowser && m.cfg != nil && m.fileBrowser != nil {
+				dirToAdd := m.fileBrowser.CurrentPath()
+				if item, ok := m.fileBrowser.SelectedItem(); ok && item.IsDir {
+					dirToAdd = item.Path
+				}
+				if m.cfg.AddMusicDir(dirToAdd) {
+					if m.libraryPanel != nil {
+						m.libraryPanel.Refresh()
+					}
+					// Scan the newly added directory
+					return m, m.scanLibraryCmd()
+				}
+			}
+			return m, nil
+
+		// d: Remove directory (in Library) or remove track from queue (in Queue)
 		case "d":
-			if m.activePanel == panels.PanelQueue && m.player != nil {
+			if m.activePanel == panels.PanelLibrary && m.cfg != nil && m.libraryPanel != nil {
+				if dir, found := m.libraryPanel.SelectedDir(); found {
+					if m.cfg.RemoveMusicDir(dir) {
+						if m.storage != nil {
+							_ = m.storage.DeleteTracksInDirectory(dir)
+						}
+						m.libraryPanel.Refresh()
+					}
+				}
+			} else if m.activePanel == panels.PanelQueue && m.player != nil {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
 					if idx, _, found := q.SelectedTrack(); found {
 						_ = m.player.RemoveFromPlaylist(idx)
 					}
 				}
+			}
+			return m, nil
+
+		// r: Rescan library directories
+		case "r":
+			if m.activePanel == panels.PanelLibrary {
+				return m, m.scanLibraryCmd()
 			}
 			return m, nil
 
@@ -457,6 +502,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							_ = m.player.TogglePause()
 						} else {
 							_ = m.player.PlayIndex(idx)
+							_ = m.player.Unpause()
 						}
 						return m, nil
 					}
@@ -505,22 +551,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recalculateLayout()
 			return m, nil
 		case "1":
-			m.activePanel = panels.PanelLibrary
-			m.lastLeftFocus = panels.PanelLibrary
-			m.updateFocus()
-			m.updateStatusBar()
-			m.recalculateLayout()
-			return m, nil
-		case "2":
 			m.activePanel = panels.PanelPlaylists
 			m.lastLeftFocus = panels.PanelPlaylists
 			m.updateFocus()
 			m.updateStatusBar()
 			m.recalculateLayout()
 			return m, nil
-		case "3":
+		case "2":
 			m.activePanel = panels.PanelFileBrowser
 			m.lastLeftFocus = panels.PanelFileBrowser
+			m.updateFocus()
+			m.updateStatusBar()
+			m.recalculateLayout()
+			return m, nil
+		case "3":
+			m.activePanel = panels.PanelLibrary
+			m.lastLeftFocus = panels.PanelLibrary
 			m.updateFocus()
 			m.updateStatusBar()
 			m.recalculateLayout()
@@ -529,17 +575,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Panel cycling: 1 -> 2 -> 3 -> 0 -> 1
 		case "tab":
 			switch m.activePanel {
-			case panels.PanelLibrary:
-				m.activePanel = panels.PanelPlaylists
-				m.lastLeftFocus = panels.PanelPlaylists
 			case panels.PanelPlaylists:
 				m.activePanel = panels.PanelFileBrowser
 				m.lastLeftFocus = panels.PanelFileBrowser
 			case panels.PanelFileBrowser:
-				m.activePanel = panels.PanelQueue
-			case panels.PanelQueue:
 				m.activePanel = panels.PanelLibrary
 				m.lastLeftFocus = panels.PanelLibrary
+			case panels.PanelLibrary:
+				m.activePanel = panels.PanelQueue
+			case panels.PanelQueue:
+				m.activePanel = panels.PanelPlaylists
+				m.lastLeftFocus = panels.PanelPlaylists
 			}
 			m.updateFocus()
 			m.updateStatusBar()
@@ -548,17 +594,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "shift+tab":
 			switch m.activePanel {
-			case panels.PanelLibrary:
-				m.activePanel = panels.PanelQueue
 			case panels.PanelPlaylists:
-				m.activePanel = panels.PanelLibrary
-				m.lastLeftFocus = panels.PanelLibrary
+				m.activePanel = panels.PanelQueue
 			case panels.PanelFileBrowser:
 				m.activePanel = panels.PanelPlaylists
 				m.lastLeftFocus = panels.PanelPlaylists
-			case panels.PanelQueue:
+			case panels.PanelLibrary:
 				m.activePanel = panels.PanelFileBrowser
 				m.lastLeftFocus = panels.PanelFileBrowser
+			case panels.PanelQueue:
+				m.activePanel = panels.PanelLibrary
+				m.lastLeftFocus = panels.PanelLibrary
 			}
 			m.updateFocus()
 			m.updateStatusBar()
@@ -583,20 +629,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Yazi-like navigation for File Browser (left: parent directory, right: enter directory / play file)
 		case "left":
-			if m.activePanel == panels.PanelFileBrowser {
-				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
-					fb.GoParent()
-				}
+			if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
+				m.fileBrowser.GoParent()
 			}
 			return m, nil
 
 		case "right":
-			if m.activePanel == panels.PanelFileBrowser {
-				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
-					if !fb.Enter() {
-						if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
-							_ = m.player.LoadFile(item.Path, "replace")
-						}
+			if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
+				if !m.fileBrowser.Enter() {
+					if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
+						_ = m.player.LoadFile(item.Path, "replace")
 					}
 				}
 			}
@@ -676,8 +718,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Save metadata to file & SQLite
 			if m.storage != nil {
 				_ = m.storage.UpdateTrackMetadata(m.tagTrackPath, m.tagTitle, m.tagArtist, m.tagAlbum)
-				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
-					lib.Refresh()
+				if m.libraryPanel != nil {
+					m.libraryPanel.Refresh()
 				}
 			}
 			m.modalMode = ModalNone
@@ -694,6 +736,36 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case ModalAddDir:
+		switch key {
+		case "esc":
+			m.modalMode = ModalNone
+			m.addDirBuffer = ""
+		case "backspace":
+			if len(m.addDirBuffer) > 0 {
+				m.addDirBuffer = m.addDirBuffer[:len(m.addDirBuffer)-1]
+			}
+		case "enter":
+			dir := strings.TrimSpace(m.addDirBuffer)
+			if dir != "" && m.cfg != nil {
+				if m.cfg.AddMusicDir(dir) {
+					if m.libraryPanel != nil {
+						m.libraryPanel.Refresh()
+					}
+					m.modalMode = ModalNone
+					m.addDirBuffer = ""
+					return m, m.scanLibraryCmd()
+				}
+			}
+			m.modalMode = ModalNone
+			m.addDirBuffer = ""
+		default:
+			if len(key) == 1 {
+				m.addDirBuffer += key
+			}
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -701,8 +773,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) applySearchFilter() {
 	if m.activePanel == panels.PanelLibrary {
-		if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
-			lib.SetFilterQuery(m.searchBuffer)
+		if m.libraryPanel != nil {
+			m.libraryPanel.SetFilterQuery(m.searchBuffer)
 		}
 	} else if m.activePanel == panels.PanelQueue {
 		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
@@ -735,19 +807,25 @@ func (m *Model) recalculateLayout() {
 	}
 
 	expandedHeight := int(float64(mainHeight) * 0.60)
-	collapsedHeight := (mainHeight - expandedHeight) / 2
-	remainingHeight := mainHeight - expandedHeight - collapsedHeight
+	inactiveCount := len(m.leftPanels) - 1
+	if inactiveCount <= 0 {
+		inactiveCount = 1
+	}
+	baseInactiveHeight := (mainHeight - expandedHeight) / inactiveCount
+	extraHeight := (mainHeight - expandedHeight) % inactiveCount
 
+	inactiveIdx := 0
 	for _, p := range m.leftPanels {
-		var h int
 		if p.ID() == activeLeft {
-			h = expandedHeight
-		} else if p.ID() == panels.PanelPlaylists && activeLeft == panels.PanelLibrary {
-			h = collapsedHeight
+			p.SetSize(leftWidth, expandedHeight)
 		} else {
-			h = remainingHeight
+			h := baseInactiveHeight
+			if inactiveIdx < extraHeight {
+				h++
+			}
+			p.SetSize(leftWidth, h)
+			inactiveIdx++
 		}
-		p.SetSize(leftWidth, h)
 	}
 
 	// Status panel
@@ -804,6 +882,10 @@ func (m *Model) renderModalOverlay(base string) string {
 	case ModalSearch:
 		title = "Fuzzy Filter"
 		modalContent = fmt.Sprintf("Type to filter:\n\n  /%s█\n\n[Esc: Clear/Close | Enter: Confirm]", m.searchBuffer)
+
+	case ModalAddDir:
+		title = "Add Music Directory"
+		modalContent = fmt.Sprintf("Enter directory path:\n\n  %s█\n\n[Esc: Cancel | Enter: Add & Scan]", m.addDirBuffer)
 
 	case ModalTagEdit:
 		title = "Edit Audio Metadata (ID3v2)"

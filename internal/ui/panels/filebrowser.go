@@ -27,6 +27,7 @@ type FileBrowserPanel struct {
 	width       int
 	height      int
 	cursor      int
+	offset      int
 	currentPath string   // Logical current directory path (preserving symlink structure)
 	history     []string // Breadcrumb stack of previous directories for clean backtracking
 	items       []FileItem
@@ -55,7 +56,12 @@ func (p *FileBrowserPanel) ID() PanelID {
 }
 
 func (p *FileBrowserPanel) Title() string {
-	return "3: File Browser"
+	return "2: Files"
+}
+
+// CurrentPath returns the current logical directory path.
+func (p *FileBrowserPanel) CurrentPath() string {
+	return p.currentPath
 }
 
 func (p *FileBrowserPanel) SetSize(w, h int) {
@@ -96,6 +102,7 @@ func (p *FileBrowserPanel) ReadDir(logicalDir string) {
 	logicalDir = filepath.Clean(logicalDir)
 	p.currentPath = logicalDir
 	p.cursor = 0
+	p.offset = 0
 	p.items = nil
 
 	entries, err := os.ReadDir(logicalDir)
@@ -252,15 +259,34 @@ func (p *FileBrowserPanel) View() string {
 
 	var lines []string
 
-	offset := 0
-	if p.cursor >= innerHeight {
-		offset = p.cursor - innerHeight + 1
+	scrollMargin := 2
+	if innerHeight > scrollMargin*2 {
+		if p.cursor < p.offset+scrollMargin {
+			p.offset = p.cursor - scrollMargin
+		} else if p.cursor >= p.offset+innerHeight-scrollMargin {
+			p.offset = p.cursor - innerHeight + 1 + scrollMargin
+		}
+	} else {
+		if p.cursor < p.offset {
+			p.offset = p.cursor
+		} else if p.cursor >= p.offset+innerHeight {
+			p.offset = p.cursor - innerHeight + 1
+		}
 	}
+
+	if maxOffset := len(p.items) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
+		p.offset = maxOffset
+	}
+	if p.offset < 0 {
+		p.offset = 0
+	}
+	offset := p.offset
 
 	for i := offset; i < len(p.items) && len(lines) < innerHeight; i++ {
 		item := p.items[i]
 		name := item.Name
-		lineStr := " " + name
+		truncated := theme.TruncateLine(name, innerWidth-1)
+		lineStr := fmt.Sprintf(" %-*s", innerWidth-1, truncated)
 
 		if i == p.cursor && p.focused {
 			lines = append(lines, theme.CursorRowStyle.Render(lineStr))
@@ -291,5 +317,5 @@ func (p *FileBrowserPanel) View() string {
 		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(p.items))
 	}
 
-	return theme.Frame("[3] Files: "+displayDir, body, innerWidth, innerHeight, p.focused, footer)
+	return theme.Frame("[2] Files: "+displayDir, body, innerWidth, innerHeight, p.focused, footer)
 }

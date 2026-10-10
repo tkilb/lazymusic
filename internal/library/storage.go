@@ -141,6 +141,16 @@ func (s *Storage) UpdateTrackMetadata(path, title, artist, album string) error {
 	return err
 }
 
+// DeleteTracksInDirectory removes cached tracks located under a directory.
+func (s *Storage) DeleteTracksInDirectory(dir string) error {
+	dir = filepath.Clean(dir)
+	pattern := dir + "/%"
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec("DELETE FROM tracks WHERE path LIKE ? OR path = ?", pattern, dir)
+	return err
+}
+
 // GetTrackModTime retrieves the cached modification timestamp for a path.
 func (s *Storage) GetTrackModTime(path string) (int64, bool) {
 	s.mu.RLock()

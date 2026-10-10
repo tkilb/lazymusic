@@ -24,6 +24,7 @@ type PlaylistsPanel struct {
 	width        int
 	height       int
 	cursor       int
+	offset       int
 	playlistsDir string
 	items        []PlaylistItemFile
 }
@@ -76,7 +77,7 @@ func (p *PlaylistsPanel) ID() PanelID {
 }
 
 func (p *PlaylistsPanel) Title() string {
-	return "2: Playlists"
+	return "1: Playlists"
 }
 
 func (p *PlaylistsPanel) SetSize(w, h int) {
@@ -162,20 +163,36 @@ func (p *PlaylistsPanel) View() string {
 
 	var lines []string
 
-	offset := 0
-	if p.cursor >= innerHeight {
-		offset = p.cursor - innerHeight + 1
+	scrollMargin := 2
+	if innerHeight > scrollMargin*2 {
+		if p.cursor < p.offset+scrollMargin {
+			p.offset = p.cursor - scrollMargin
+		} else if p.cursor >= p.offset+innerHeight-scrollMargin {
+			p.offset = p.cursor - innerHeight + 1 + scrollMargin
+		}
+	} else {
+		if p.cursor < p.offset {
+			p.offset = p.cursor
+		} else if p.cursor >= p.offset+innerHeight {
+			p.offset = p.cursor - innerHeight + 1
+		}
 	}
+
+	if maxOffset := len(p.items) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
+		p.offset = maxOffset
+	}
+	if p.offset < 0 {
+		p.offset = 0
+	}
+	offset := p.offset
 
 	if len(p.items) == 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [No playlists in ~/.config/lazymusic/playlists]"))
 	} else {
 		for i := offset; i < len(p.items) && len(lines) < innerHeight; i++ {
 			item := p.items[i]
-			lineStr := fmt.Sprintf(" %-*s", innerWidth-1, item.Name)
-			if len(lineStr) > innerWidth {
-				lineStr = lineStr[:innerWidth]
-			}
+			truncated := theme.TruncateLine(item.Name, innerWidth-1)
+			lineStr := fmt.Sprintf(" %-*s", innerWidth-1, truncated)
 
 			if i == p.cursor && p.focused {
 				lines = append(lines, theme.CursorRowStyle.Render(lineStr))
@@ -198,5 +215,5 @@ func (p *PlaylistsPanel) View() string {
 		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(p.items))
 	}
 
-	return theme.Frame("[2] Playlists", body, innerWidth, innerHeight, p.focused, footer)
+	return theme.Frame("[1] Playlists", body, innerWidth, innerHeight, p.focused, footer)
 }

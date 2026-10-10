@@ -17,6 +17,7 @@ type QueuePanel struct {
 	width       int
 	height      int
 	cursor      int
+	offset      int
 	playlist    []player.PlaylistItem
 	currentPos  int
 	filterQuery string
@@ -150,10 +151,28 @@ func (p *QueuePanel) View() string {
 	var lines []string
 	filtered := p.filteredPlaylist()
 
-	offset := 0
-	if p.cursor >= innerHeight {
-		offset = p.cursor - innerHeight + 1
+	scrollMargin := 2
+	if innerHeight > scrollMargin*2 {
+		if p.cursor < p.offset+scrollMargin {
+			p.offset = p.cursor - scrollMargin
+		} else if p.cursor >= p.offset+innerHeight-scrollMargin {
+			p.offset = p.cursor - innerHeight + 1 + scrollMargin
+		}
+	} else {
+		if p.cursor < p.offset {
+			p.offset = p.cursor
+		} else if p.cursor >= p.offset+innerHeight {
+			p.offset = p.cursor - innerHeight + 1
+		}
 	}
+
+	if maxOffset := len(filtered) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
+		p.offset = maxOffset
+	}
+	if p.offset < 0 {
+		p.offset = 0
+	}
+	offset := p.offset
 
 	if len(filtered) == 0 {
 		if p.filterQuery != "" {
@@ -175,10 +194,12 @@ func (p *QueuePanel) View() string {
 			}
 
 			prefix := fmt.Sprintf("%s%2d. ", playingIndicator, i+1)
-			lineStr := fmt.Sprintf(" %s%-*s", prefix, innerWidth-len(prefix)-1, title)
-			if len(lineStr) > innerWidth {
-				lineStr = lineStr[:innerWidth]
+			availableWidth := innerWidth - len(prefix) - 1
+			if availableWidth < 0 {
+				availableWidth = 0
 			}
+			truncatedTitle := theme.TruncateLine(title, availableWidth)
+			lineStr := fmt.Sprintf(" %s%-*s", prefix, availableWidth, truncatedTitle)
 
 			if i == p.cursor && p.focused {
 				lines = append(lines, theme.CursorRowStyle.Render(lineStr))

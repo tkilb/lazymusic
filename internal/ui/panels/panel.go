@@ -8,10 +8,10 @@ import (
 type PanelID int
 
 const (
-	PanelQueue PanelID = iota // 0: Queue (right column)
-	PanelLibrary              // 1: Library
-	PanelPlaylists            // 2: Playlists
-	PanelFileBrowser          // 3: File Browser
+	PanelQueue       PanelID = iota // 0: Queue (right column)
+	PanelPlaylists                  // 1: Playlists
+	PanelFileBrowser                // 2: Files (File Browser)
+	PanelLibrary                    // 3: Dirs (Music Directories)
 )
 
 // Panel defines the interface that all TUI panels must implement.

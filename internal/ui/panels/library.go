@@ -2,63 +2,56 @@ package panels
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/tylerkilburn/lazymusic/internal/config"
 	"github.com/tylerkilburn/lazymusic/internal/library"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
-// LibraryPanel implements Panel for Panel 1 (Library).
+// LibraryPanel implements Panel for Panel 1 (Library - Directories).
 type LibraryPanel struct {
-	focused      bool
-	width        int
-	height       int
-	tabs         []string
-	curTab       int
-	cursor       int
-	storage      *library.Storage
-	items        map[int][]string
-	tracks       []library.Track
-	filterQuery  string
-	filterActive bool
+	focused     bool
+	width       int
+	height      int
+	cursor      int
+	offset      int
+	cfg         *config.Config
+	storage     *library.Storage
+	dirs        []string
+	filterQuery string
 }
 
-// NewLibraryPanel creates a new LibraryPanel instance connected to SQLite storage.
-func NewLibraryPanel(storage *library.Storage) *LibraryPanel {
+// NewLibraryPanel creates a new LibraryPanel instance displaying configured music directories.
+func NewLibraryPanel(cfg *config.Config, storage *library.Storage) *LibraryPanel {
 	p := &LibraryPanel{
-		tabs:    []string{"Dirs", "Artists", "Albums", "Tracks"},
-		curTab:  0,
 		cursor:  0,
+		cfg:     cfg,
 		storage: storage,
-		items:   make(map[int][]string),
 	}
 	p.Refresh()
 	return p
 }
 
-// Refresh reloads artists, albums, and tracks from SQLite.
+// Refresh reloads directories from config.
 func (p *LibraryPanel) Refresh() {
-	if p.storage == nil {
+	if p.cfg == nil {
 		return
 	}
-
-	artists, _ := p.storage.GetArtists()
-	albums, _ := p.storage.GetAlbums()
-	tracks, _ := p.storage.GetTracks()
-
-	p.tracks = tracks
-
-	var trackTitles []string
-	for _, t := range tracks {
-		trackTitles = append(trackTitles, fmt.Sprintf("%s - %s", t.Artist, t.Title))
+	p.dirs = nil
+	for _, d := range p.cfg.MusicDirs {
+		p.dirs = append(p.dirs, d)
 	}
 
-	p.items[0] = []string{"~/Music"}
-	p.items[1] = artists
-	p.items[2] = albums
-	p.items[3] = trackTitles
+	if p.cursor >= len(p.dirs) {
+		p.cursor = len(p.dirs) - 1
+	}
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
 }
 
 func (p *LibraryPanel) ID() PanelID {
@@ -66,7 +59,7 @@ func (p *LibraryPanel) ID() PanelID {
 }
 
 func (p *LibraryPanel) Title() string {
-	return "1: Library"
+	return "3: Dirs"
 }
 
 func (p *LibraryPanel) SetSize(w, h int) {
@@ -86,30 +79,19 @@ func (p *LibraryPanel) IsFocused() bool {
 	return p.focused
 }
 
-func (p *LibraryPanel) NextTab() {
-	p.curTab = (p.curTab + 1) % len(p.tabs)
-	p.cursor = 0
-	p.filterQuery = ""
-	p.filterActive = false
-}
+func (p *LibraryPanel) NextTab() {}
 
-func (p *LibraryPanel) PrevTab() {
-	p.curTab = (p.curTab - 1 + len(p.tabs)) % len(p.tabs)
-	p.cursor = 0
-	p.filterQuery = ""
-	p.filterActive = false
-}
+func (p *LibraryPanel) PrevTab() {}
 
-func (p *LibraryPanel) filteredItems() []string {
-	all := p.items[p.curTab]
+func (p *LibraryPanel) filteredDirs() []string {
 	if p.filterQuery == "" {
-		return all
+		return p.dirs
 	}
 	query := strings.ToLower(p.filterQuery)
 	var filtered []string
-	for _, item := range all {
-		if strings.Contains(strings.ToLower(item), query) {
-			filtered = append(filtered, item)
+	for _, d := range p.dirs {
+		if strings.Contains(strings.ToLower(d), query) {
+			filtered = append(filtered, d)
 		}
 	}
 	return filtered
@@ -122,7 +104,7 @@ func (p *LibraryPanel) CursorUp() {
 }
 
 func (p *LibraryPanel) CursorDown() {
-	list := p.filteredItems()
+	list := p.filteredDirs()
 	if p.cursor < len(list)-1 {
 		p.cursor++
 	}
@@ -139,18 +121,13 @@ func (p *LibraryPanel) FilterQuery() string {
 	return p.filterQuery
 }
 
-// SelectedTrack returns the currently highlighted track, if in the Tracks tab.
-func (p *LibraryPanel) SelectedTrack() (library.Track, bool) {
-	filtered := p.filteredItems()
-	if p.curTab == 3 && p.cursor >= 0 && p.cursor < len(filtered) {
-		selectedTitle := filtered[p.cursor]
-		for _, t := range p.tracks {
-			if fmt.Sprintf("%s - %s", t.Artist, t.Title) == selectedTitle {
-				return t, true
-			}
-		}
+// SelectedDir returns the currently highlighted directory path.
+func (p *LibraryPanel) SelectedDir() (string, bool) {
+	filtered := p.filteredDirs()
+	if p.cursor >= 0 && p.cursor < len(filtered) {
+		return filtered[p.cursor], true
 	}
-	return library.Track{}, false
+	return "", false
 }
 
 func (p *LibraryPanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
@@ -167,35 +144,53 @@ func (p *LibraryPanel) View() string {
 		innerHeight = 0
 	}
 
-	var tabs []theme.Tab
-	for i, tab := range p.tabs {
-		tabs = append(tabs, theme.Tab{
-			Label:  tab,
-			Active: i == p.curTab,
-		})
-	}
-
-	currentItems := p.filteredItems()
+	currentItems := p.filteredDirs()
 	var lines []string
 
-	offset := 0
-	if p.cursor >= innerHeight {
-		offset = p.cursor - innerHeight + 1
+	scrollMargin := 2
+	if innerHeight > scrollMargin*2 {
+		if p.cursor < p.offset+scrollMargin {
+			p.offset = p.cursor - scrollMargin
+		} else if p.cursor >= p.offset+innerHeight-scrollMargin {
+			p.offset = p.cursor - innerHeight + 1 + scrollMargin
+		}
+	} else {
+		if p.cursor < p.offset {
+			p.offset = p.cursor
+		} else if p.cursor >= p.offset+innerHeight {
+			p.offset = p.cursor - innerHeight + 1
+		}
 	}
 
-	for i := offset; i < len(currentItems) && len(lines) < innerHeight; i++ {
-		item := currentItems[i]
-		lineStr := fmt.Sprintf(" %-*s", innerWidth-1, item)
-		if len(lineStr) > innerWidth {
-			lineStr = lineStr[:innerWidth]
-		}
+	if maxOffset := len(currentItems) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
+		p.offset = maxOffset
+	}
+	if p.offset < 0 {
+		p.offset = 0
+	}
+	offset := p.offset
 
-		if i == p.cursor && p.focused {
-			lines = append(lines, theme.CursorRowStyle.Render(lineStr))
-		} else if i == p.cursor && !p.focused {
-			lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
-		} else {
-			lines = append(lines, lineStr)
+	home, _ := os.UserHomeDir()
+
+	if len(currentItems) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [No music directories configured - press 'a' to add]"))
+	} else {
+		for i := offset; i < len(currentItems) && len(lines) < innerHeight; i++ {
+			item := currentItems[i]
+			displayPath := item
+			if strings.HasPrefix(displayPath, home) {
+				displayPath = "~" + strings.TrimPrefix(displayPath, home)
+			}
+			truncated := theme.TruncateLine(displayPath, innerWidth-1)
+			lineStr := fmt.Sprintf(" %-*s", innerWidth-1, truncated)
+
+			if i == p.cursor && p.focused {
+				lines = append(lines, theme.CursorRowStyle.Render(lineStr))
+			} else if i == p.cursor && !p.focused {
+				lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
+			} else {
+				lines = append(lines, lineStr)
+			}
 		}
 	}
 
@@ -213,5 +208,5 @@ func (p *LibraryPanel) View() string {
 		footer = "/" + p.filterQuery + " " + footer
 	}
 
-	return theme.FrameTabs("[1]", tabs, body, innerWidth, innerHeight, p.focused, footer)
+	return theme.Frame("[3] Dirs", body, innerWidth, innerHeight, p.focused, footer)
 }
