@@ -11,7 +11,7 @@ import (
 
 	id3v2 "github.com/bogem/id3v2/v2"
 	"github.com/dhowden/tag"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // Track represents an audio track metadata entry.
@@ -42,7 +42,7 @@ func Open(dbPath string) (*Storage, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite3", dbPath+"?_journal=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

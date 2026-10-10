@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Bumps VERSION per semver, commits just that file, tags the commit
+# v<new-version>, and pushes both the branch and the tag — triggering
+# .github/workflows/release.yml. Invoked via `make release [minor|major]`.
+#
+# It refuses to run on a dirty tree and asks for confirmation before
+# committing/pushing (skip with -y/--yes or RELEASE_YES=1).
+set -euo pipefail
+
+bump_type="${1:-patch}"
+case "$bump_type" in
+patch | minor | major) ;;
+*)
+	echo "Usage: $0 [patch|minor|major]" >&2
+	exit 1
+	;;
+esac
+
+if [ -n "$(git status --porcelain)" ]; then
+	echo "Working tree not clean; commit or stash changes first." >&2
+	exit 1
+fi
+
+current="$(cat VERSION)"
+if ! [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo "VERSION '$current' isn't a plain MAJOR.MINOR.PATCH; bump it by hand." >&2
+	exit 1
+fi
+
+IFS=. read -r major minor patch <<<"$current"
+case "$bump_type" in
+patch) patch=$((patch + 1)) ;;
+minor)
+	minor=$((minor + 1))
+	patch=0
+	;;
+major)
+	major=$((major + 1))
+	minor=0
+	patch=0
+	;;
+esac
+new_version="${major}.${minor}.${patch}"
+
+if git rev-parse "v${new_version}" >/dev/null 2>&1; then
+	echo "Tag v${new_version} already exists." >&2
+	exit 1
+fi
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "${2:-}" != "-y" ] && [ "${2:-}" != "--yes" ] && [ "${RELEASE_YES:-}" != "1" ]; then
+	echo "About to release v${new_version} (current ${current}) from branch '${branch}':"
+	echo "  - commit VERSION bump, tag v${new_version}"
+	echo "  - push '${branch}' and tag v${new_version} to origin (triggers the Release workflow)"
+	read -r -p "Proceed? [y/N] " reply
+	case "$reply" in
+	y | Y | yes | YES) ;;
+	*)
+		echo "Aborted." >&2
+		exit 1
+		;;
+	esac
+fi
+
+echo "$new_version" >VERSION
+git add VERSION
+git commit -m "chore: release v${new_version}"
+git tag "v${new_version}"
+git push origin HEAD
+git push origin "v${new_version}"
+
+echo "Released v${new_version} — check the Release workflow in GitHub Actions."
