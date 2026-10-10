@@ -31,6 +31,7 @@ type FileBrowserPanel struct {
 	currentPath string   // Logical current directory path (preserving symlink structure)
 	history     []string // Breadcrumb stack of previous directories for clean backtracking
 	items       []FileItem
+	searchQuery string
 }
 
 // NewFileBrowserPanel creates a new FileBrowserPanel initialized to the user's music or home directory.
@@ -95,6 +96,73 @@ func (p *FileBrowserPanel) CursorDown() {
 	if p.cursor < len(p.items)-1 {
 		p.cursor++
 	}
+}
+
+func (p *FileBrowserPanel) PageUp()   { p.cursor = pageMove(p.cursor, len(p.items), p.height, -1) }
+func (p *FileBrowserPanel) PageDown() { p.cursor = pageMove(p.cursor, len(p.items), p.height, 1) }
+
+// Search sets query as the active search and jumps cursor to nearest match.
+func (p *FileBrowserPanel) Search(query string) bool {
+	p.searchQuery = query
+	i, ok := p.findMatch(p.cursor, 1, true)
+	if ok {
+		p.cursor = i
+	}
+	return ok
+}
+
+// ClearSearch discards the active search query.
+func (p *FileBrowserPanel) ClearSearch() {
+	p.searchQuery = ""
+}
+
+// HasActiveSearch reports whether a search query is active.
+func (p *FileBrowserPanel) HasActiveSearch() bool {
+	return p.searchQuery != ""
+}
+
+// NextMatch moves cursor to next match forward.
+func (p *FileBrowserPanel) NextMatch() bool {
+	if p.searchQuery == "" {
+		return false
+	}
+	i, ok := p.findMatch(p.cursor, 1, false)
+	if ok {
+		p.cursor = i
+	}
+	return ok
+}
+
+// PrevMatch moves cursor to previous match backward.
+func (p *FileBrowserPanel) PrevMatch() bool {
+	if p.searchQuery == "" {
+		return false
+	}
+	i, ok := p.findMatch(p.cursor, -1, false)
+	if ok {
+		p.cursor = i
+	}
+	return ok
+}
+
+func (p *FileBrowserPanel) findMatch(start, direction int, includeStart bool) (int, bool) {
+	n := len(p.items)
+	if n == 0 || p.searchQuery == "" {
+		return 0, false
+	}
+	i := start
+	if !includeStart {
+		i += direction
+	}
+	i = ((i % n) + n) % n
+	lowerQ := strings.ToLower(p.searchQuery)
+	for step := 0; step < n; step++ {
+		if strings.Contains(strings.ToLower(p.items[i].Name), lowerQ) {
+			return i, true
+		}
+		i = ((i+direction)%n + n) % n
+	}
+	return 0, false
 }
 
 // ReadDir loads directory contents, placing directories first, followed by audio files.
@@ -286,17 +354,23 @@ func (p *FileBrowserPanel) View() string {
 		item := p.items[i]
 		name := item.Name
 		truncated := theme.TruncateLine(name, innerWidth-1)
-		lineStr := fmt.Sprintf(" %-*s", innerWidth-1, truncated)
 
+		rowBaseStyle := lipgloss.NewStyle()
 		if i == p.cursor && p.focused {
-			lines = append(lines, theme.CursorRowStyle.Render(lineStr))
+			rowBaseStyle = theme.CursorRowStyle
 		} else if i == p.cursor && !p.focused {
-			lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
+			rowBaseStyle = lipgloss.NewStyle().Bold(true)
 		} else if item.IsDir {
-			lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
-		} else {
-			lines = append(lines, lineStr)
+			rowBaseStyle = lipgloss.NewStyle().Bold(true)
 		}
+
+		renderedName := theme.RenderWithMatches(truncated, p.searchQuery, rowBaseStyle, i == p.cursor)
+		pad := (innerWidth - 1) - len([]rune(truncated))
+		if pad < 0 {
+			pad = 0
+		}
+		lineStr := fmt.Sprintf(" %s%s", renderedName, rowBaseStyle.Render(strings.Repeat(" ", pad)))
+		lines = append(lines, lineStr)
 	}
 
 	for len(lines) < innerHeight {
@@ -315,6 +389,9 @@ func (p *FileBrowserPanel) View() string {
 	var footer string
 	if len(p.items) > 0 {
 		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(p.items))
+	}
+	if p.searchQuery != "" {
+		footer = "/" + p.searchQuery + " " + footer
 	}
 
 	return theme.Frame("[2] Files: "+displayDir, body, innerWidth, innerHeight, p.focused, footer)

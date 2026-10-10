@@ -21,11 +21,12 @@ type StatusPanel struct {
 	album     string
 	year      string
 	format    string
-	currTime  string
-	totalTime string
-	percent   float64
-	volume    int
-	bindings  []statusbar.Binding
+	currTime     string
+	totalTime    string
+	percent      float64
+	volume       int
+	bindings     []statusbar.Binding
+	searchPrompt string
 }
 
 // NewStatusPanel creates a new StatusPanel instance.
@@ -46,6 +47,10 @@ func NewStatusPanel() *StatusPanel {
 
 func (s *StatusPanel) SetKeybindings(b []statusbar.Binding) {
 	s.bindings = b
+}
+
+func (s *StatusPanel) SetSearchPrompt(prompt string) {
+	s.searchPrompt = prompt
 }
 
 func (s *StatusPanel) SetPlaybackState(state player.PlaybackState) {
@@ -142,8 +147,11 @@ func (s *StatusPanel) View() string {
 	}
 	progressLine := fmt.Sprintf("%s%s%s", timePrefix, bar.String(), timeSuffix)
 
-	// Line 3: lazygit-style context-aware keybindings rendered with statusbar.Render
+	// Line 3: lazygit-style context-aware keybindings or active search prompt
 	controls := " " + statusbar.Render(s.bindings)
+	if s.searchPrompt != "" {
+		controls = " " + lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteGreen).Render(s.searchPrompt)
+	}
 
 	lines := []string{trackInfo, progressLine, controls}
 	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")

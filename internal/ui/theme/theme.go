@@ -237,3 +237,37 @@ func TruncateLine(s string, maxWidth int) string {
 	}
 	return s
 }
+
+// RenderWithMatches highlights substrings matching query within s.
+// Selected row uses PaletteCyan (focused) / unselected rows use PaletteYellow (unfocused).
+func RenderWithMatches(s, query string, base lipgloss.Style, selected bool) string {
+	if query == "" {
+		return base.Render(s)
+	}
+	highlight := PaletteYellow
+	if selected {
+		highlight = PaletteCyan
+	}
+	matchStyle := base.Copy().Background(highlight).Foreground(lipgloss.Color("0")).Bold(false)
+
+	lowerS := strings.ToLower(s)
+	lowerQ := strings.ToLower(query)
+
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		idx := strings.Index(lowerS[i:], lowerQ)
+		if idx < 0 {
+			b.WriteString(base.Render(s[i:]))
+			break
+		}
+		idx += i
+		if idx > i {
+			b.WriteString(base.Render(s[i:idx]))
+		}
+		matchEnd := idx + len(query)
+		b.WriteString(matchStyle.Render(s[idx:matchEnd]))
+		i = matchEnd
+	}
+	return b.String()
+}

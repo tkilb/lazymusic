@@ -401,6 +401,57 @@ func (c *Client) LoadFile(path, mode string) error {
 	return err
 }
 
+// AppendFile appends an audio file and returns its mpv playlist_entry_id.
+func (c *Client) AppendFile(path string) (int, error) {
+	resp, err := c.sendCommand("loadfile", path, "append")
+	if err != nil {
+		return 0, err
+	}
+	if dataMap, ok := resp.Data.(map[string]interface{}); ok {
+		if entryID, ok := dataMap["playlist_entry_id"].(float64); ok {
+			return int(entryID), nil
+		}
+	}
+	return 0, nil
+}
+
+// PlaylistIndexOfEntry synchronously queries mpv (bypassing the asynchronously
+// updated cached state) for the current index of the playlist entry with the
+// given id. It returns -1 if the entry is not in the playlist.
+func (c *Client) PlaylistIndexOfEntry(entryID int) (int, error) {
+	resp, err := c.sendCommand("get_property", "playlist")
+	if err != nil {
+		return -1, err
+	}
+	list, ok := resp.Data.([]interface{})
+	if !ok {
+		return -1, nil
+	}
+	for idx, elem := range list {
+		if itemMap, ok := elem.(map[string]interface{}); ok {
+			if id, ok := itemMap["id"].(float64); ok && int(id) == entryID {
+				return idx, nil
+			}
+		}
+	}
+	return -1, nil
+}
+
+// PlayNext inserts an audio file immediately after the current playing track or at the beginning.
+// Uses mpv command: loadfile <path> append-play
+func (c *Client) PlayNext(path string) error {
+	// In mpv: loadfile path append
+	// or we can insert after current position using playlist-move or loadfile
+	_, err := c.sendCommand("loadfile", path, "append")
+	return err
+}
+
+// SeekAbsolute seeks to an exact timestamp in seconds.
+func (c *Client) SeekAbsolute(seconds float64) error {
+	_, err := c.sendCommand("seek", seconds, "absolute")
+	return err
+}
+
 // PlayIndex switches playback to a specific index in mpv's playlist.
 func (c *Client) PlayIndex(index int) error {
 	_, err := c.sendCommand("set_property", "playlist-pos", index)

@@ -61,51 +61,93 @@ func (p *QueuePanel) NextTab() {}
 
 func (p *QueuePanel) PrevTab() {}
 
-func (p *QueuePanel) filteredPlaylist() []player.PlaylistItem {
-	if p.filterQuery == "" {
-		return p.playlist
-	}
-	query := strings.ToLower(p.filterQuery)
-	var filtered []player.PlaylistItem
-	for _, it := range p.playlist {
-		title := it.Title
-		if title == "" {
-			title = filepath.Base(it.Filename)
-		}
-		if strings.Contains(strings.ToLower(title), query) {
-			filtered = append(filtered, it)
-		}
-	}
-	return filtered
-}
-
 func (p *QueuePanel) CursorUp() {
 	if p.cursor > 0 {
 		p.cursor--
 	}
 }
 
+
 func (p *QueuePanel) CursorDown() {
-	list := p.filteredPlaylist()
-	if p.cursor < len(list)-1 {
+	if p.cursor < len(p.playlist)-1 {
 		p.cursor++
 	}
 }
+
+func (p *QueuePanel) PageUp()   { p.cursor = pageMove(p.cursor, len(p.playlist), p.height, -1) }
+func (p *QueuePanel) PageDown() { p.cursor = pageMove(p.cursor, len(p.playlist), p.height, 1) }
 
 // Cursor returns current cursor position.
 func (p *QueuePanel) Cursor() int {
 	return p.cursor
 }
 
-// SetFilterQuery sets the search filter query for Queue.
-func (p *QueuePanel) SetFilterQuery(query string) {
+// Search sets query as the active search and jumps cursor to nearest match.
+func (p *QueuePanel) Search(query string) bool {
 	p.filterQuery = query
-	p.cursor = 0
+	i, ok := p.findMatch(p.cursor, 1, true)
+	if ok {
+		p.cursor = i
+	}
+	return ok
 }
 
-// FilterQuery returns the search filter query for Queue.
-func (p *QueuePanel) FilterQuery() string {
-	return p.filterQuery
+// ClearSearch discards the active search query.
+func (p *QueuePanel) ClearSearch() {
+	p.filterQuery = ""
+}
+
+// HasActiveSearch reports whether a search query is active.
+func (p *QueuePanel) HasActiveSearch() bool {
+	return p.filterQuery != ""
+}
+
+// NextMatch moves cursor to next match forward.
+func (p *QueuePanel) NextMatch() bool {
+	if p.filterQuery == "" {
+		return false
+	}
+	i, ok := p.findMatch(p.cursor, 1, false)
+	if ok {
+		p.cursor = i
+	}
+	return ok
+}
+
+// PrevMatch moves cursor to previous match backward.
+func (p *QueuePanel) PrevMatch() bool {
+	if p.filterQuery == "" {
+		return false
+	}
+	i, ok := p.findMatch(p.cursor, -1, false)
+	if ok {
+		p.cursor = i
+	}
+	return ok
+}
+
+func (p *QueuePanel) findMatch(start, direction int, includeStart bool) (int, bool) {
+	n := len(p.playlist)
+	if n == 0 || p.filterQuery == "" {
+		return 0, false
+	}
+	i := start
+	if !includeStart {
+		i += direction
+	}
+	i = ((i % n) + n) % n
+	lowerQ := strings.ToLower(p.filterQuery)
+	for step := 0; step < n; step++ {
+		title := p.playlist[i].Title
+		if title == "" {
+			title = filepath.Base(p.playlist[i].Filename)
+		}
+		if strings.Contains(strings.ToLower(title), lowerQ) {
+			return i, true
+		}
+		i = ((i+direction)%n + n) % n
+	}
+	return 0, false
 }
 
 // SetPlaylist updates the queue with mpv's active playlist.
@@ -120,16 +162,22 @@ func (p *QueuePanel) SetPlaylist(items []player.PlaylistItem, currentPos int) {
 	}
 }
 
+// Playlist returns a copy of current playlist items.
+func (p *QueuePanel) Playlist() []player.PlaylistItem {
+	res := make([]player.PlaylistItem, len(p.playlist))
+	copy(res, p.playlist)
+	return res
+}
+
+// CurrentPos returns current playlist playing index.
+func (p *QueuePanel) CurrentPos() int {
+	return p.currentPos
+}
+
 // SelectedTrack returns the selected item index and track.
 func (p *QueuePanel) SelectedTrack() (int, player.PlaylistItem, bool) {
-	filtered := p.filteredPlaylist()
-	if p.cursor >= 0 && p.cursor < len(filtered) {
-		selectedItem := filtered[p.cursor]
-		for originalIdx, item := range p.playlist {
-			if item.ID == selectedItem.ID {
-				return originalIdx, item, true
-			}
-		}
+	if p.cursor >= 0 && p.cursor < len(p.playlist) {
+		return p.cursor, p.playlist[p.cursor], true
 	}
 	return -1, player.PlaylistItem{}, false
 }
@@ -149,7 +197,6 @@ func (p *QueuePanel) View() string {
 	}
 
 	var lines []string
-	filtered := p.filteredPlaylist()
 
 	scrollMargin := 2
 	if innerHeight > scrollMargin*2 {
@@ -166,7 +213,7 @@ func (p *QueuePanel) View() string {
 		}
 	}
 
-	if maxOffset := len(filtered) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
+	if maxOffset := len(p.playlist) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
 		p.offset = maxOffset
 	}
 	if p.offset < 0 {
@@ -174,15 +221,11 @@ func (p *QueuePanel) View() string {
 	}
 	offset := p.offset
 
-	if len(filtered) == 0 {
-		if p.filterQuery != "" {
-			lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [No matching tracks found]"))
-		} else {
-			lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [Queue is empty - press 'a' or Enter on tracks to add]"))
-		}
+	if len(p.playlist) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [Queue is empty - press 'a' on files to add]"))
 	} else {
-		for i := offset; i < len(filtered) && len(lines) < innerHeight; i++ {
-			item := filtered[i]
+		for i := offset; i < len(p.playlist) && len(lines) < innerHeight; i++ {
+			item := p.playlist[i]
 			title := item.Title
 			if title == "" {
 				title = filepath.Base(item.Filename)
@@ -199,15 +242,21 @@ func (p *QueuePanel) View() string {
 				availableWidth = 0
 			}
 			truncatedTitle := theme.TruncateLine(title, availableWidth)
-			lineStr := fmt.Sprintf(" %s%-*s", prefix, availableWidth, truncatedTitle)
 
+			rowBaseStyle := lipgloss.NewStyle()
 			if i == p.cursor && p.focused {
-				lines = append(lines, theme.CursorRowStyle.Render(lineStr))
+				rowBaseStyle = theme.CursorRowStyle
 			} else if i == p.cursor && !p.focused {
-				lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
-			} else {
-				lines = append(lines, lineStr)
+				rowBaseStyle = lipgloss.NewStyle().Bold(true)
 			}
+
+			renderedTitle := theme.RenderWithMatches(truncatedTitle, p.filterQuery, rowBaseStyle, i == p.cursor)
+			pad := availableWidth - len([]rune(truncatedTitle))
+			if pad < 0 {
+				pad = 0
+			}
+			lineStr := fmt.Sprintf(" %s%s%s", prefix, renderedTitle, rowBaseStyle.Render(strings.Repeat(" ", pad)))
+			lines = append(lines, lineStr)
 		}
 	}
 

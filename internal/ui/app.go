@@ -20,7 +20,6 @@ type ModalMode int
 const (
 	ModalNone ModalMode = iota
 	ModalHelp
-	ModalSearch
 	ModalTagEdit
 	ModalAddDir
 )
@@ -41,16 +40,27 @@ type Model struct {
 	statusPanel   *panels.StatusPanel
 	lastLeftFocus panels.PanelID
 
+	// Search state (lazytask/lazygit inline search)
+	searching    bool
+	searchBuffer string
+
 	// Modal states
 	modalMode    ModalMode
 	helpScroll   int
-	searchBuffer string
 	addDirBuffer string
 	tagTrackPath string
 	tagTitle     string
 	tagArtist    string
 	tagAlbum     string
 	tagFieldIdx  int // 0: Title, 1: Artist, 2: Album
+
+	// Preview state
+	previewing       bool
+	previewStarted   bool
+	previewEntryID   int
+	previewPos       int
+	previewSavedPos  int
+	previewSavedTime float64
 }
 
 // PlaybackMsg wraps player state updates for Bubble Tea.
@@ -119,19 +129,21 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "a", Label: "add dir"},
 			{Key: "d", Label: "remove dir"},
 			{Key: "r", Label: "rescan"},
-			{Key: "/", Label: "filter"},
+			{Key: "/", Label: "search"},
 		}
 	case panels.PanelPlaylists:
 		local = []statusbar.Binding{
 			{Key: "Enter", Label: "load"},
 			{Key: "a", Label: "queue"},
+			{Key: "/", Label: "search"},
 		}
 	case panels.PanelFileBrowser:
 		local = []statusbar.Binding{
-			{Key: "→/Enter", Label: "open"},
+			{Key: "→/Enter", Label: "open/preview"},
 			{Key: "←", Label: "back"},
 			{Key: "A", Label: "add to lib"},
 			{Key: "a", Label: "queue"},
+			{Key: "/", Label: "search"},
 		}
 	case panels.PanelQueue:
 		local = []statusbar.Binding{
@@ -140,7 +152,7 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "D", Label: "clear"},
 			{Key: "s", Label: "shuffle"},
 			{Key: "Shift+↑/↓", Label: "reorder"},
-			{Key: "/", Label: "filter"},
+			{Key: "/", Label: "search"},
 		}
 	}
 
@@ -158,19 +170,21 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "a", Label: "add new music directory to library"},
 			{Key: "d", Label: "remove selected directory from library"},
 			{Key: "r", Label: "rescan audio files in library"},
-			{Key: "/", Label: "filter music directories"},
+			{Key: "/", Label: "search music directories"},
 		}
 	case panels.PanelPlaylists:
 		return []statusbar.Binding{
 			{Key: "Enter", Label: "load playlist (replaces queue)"},
 			{Key: "a", Label: "append all playlist tracks to queue"},
+			{Key: "/", Label: "search playlists"},
 		}
 	case panels.PanelFileBrowser:
 		return []statusbar.Binding{
-			{Key: "→ / Enter", Label: "enter directory or play selected audio file"},
+			{Key: "→ / Enter", Label: "enter directory or preview audio file (leaves queue intact)"},
 			{Key: "←", Label: "go back to previous directory (Yazi-style)"},
 			{Key: "A", Label: "add current directory to Library Music Dirs"},
 			{Key: "a", Label: "append selected audio file to queue"},
+			{Key: "/", Label: "search files and directories"},
 		}
 	case panels.PanelQueue:
 		return []statusbar.Binding{
@@ -180,7 +194,7 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "Shift+↑", Label: "move selected track up in queue"},
 			{Key: "Shift+↓", Label: "move selected track down in queue"},
 			{Key: "s", Label: "shuffle queue"},
-			{Key: "/", Label: "filter tracks in queue"},
+			{Key: "/", Label: "search tracks in queue"},
 		}
 	}
 	return nil
@@ -191,6 +205,10 @@ func (m *Model) helpNavigationBindings() []statusbar.Binding {
 		{Key: "0-3", Label: "jump directly to panel (0: Queue, 1: Playlists, 2: Files, 3: Dirs)"},
 		{Key: "Tab / Shift+Tab", Label: "cycle panels clockwise / counter-clockwise"},
 		{Key: "↑ / ↓", Label: "navigate items in current panel"},
+		{Key: ". / ,", Label: "page down / page up in current panel"},
+		{Key: "/", Label: "search items in focused panel (inline prompt)"},
+		{Key: "n / N", Label: "jump to next / previous match"},
+		{Key: "Esc", Label: "clear active search query / cancel prompt"},
 	}
 }
 
@@ -291,8 +309,64 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PlaybackMsg:
 		state := player.PlaybackState(msg)
 		m.statusPanel.SetPlaybackState(state)
+
+		if m.previewing {
+			// Decide everything from the playlist snapshot's own "current"
+			// flags. PlaylistPos / IdleActive are cached separately and can
+			// lag the playlist, so mixing them caused false "preview ended"
+			// detections when previewing files in quick succession.
+			previewCurrent := false
+			otherCurrent := false
+			for idx, item := range state.Playlist {
+				if item.ID == m.previewEntryID {
+					m.previewPos = idx
+					previewCurrent = item.Current
+				} else if item.Current {
+					otherCurrent = true
+				}
+			}
+
+			if previewCurrent {
+				m.previewStarted = true
+			}
+
+			if m.previewStarted && !previewCurrent {
+				// Preview finished: drop it. Resume the saved queue position only
+				// if the preview ended on its own (nothing current); if the user
+				// jumped to another queue track, keep that.
+				finishedID := m.previewEntryID
+				userJumped := otherCurrent
+				m.previewing = false
+				m.previewStarted = false
+				m.previewEntryID = 0
+				if m.player != nil {
+					if idx, err := m.player.PlaylistIndexOfEntry(finishedID); err == nil && idx >= 0 {
+						_ = m.player.RemoveFromPlaylist(idx)
+					}
+					if !userJumped && m.previewSavedPos >= 0 {
+						_ = m.player.PlayIndex(m.previewSavedPos)
+						if m.previewSavedTime > 0 {
+							_ = m.player.SeekAbsolute(m.previewSavedTime)
+						}
+						_ = m.player.Unpause()
+					}
+				}
+			}
+		}
+
 		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
-			q.SetPlaylist(state.Playlist, state.PlaylistPos)
+			if m.previewing && m.previewEntryID > 0 {
+				// Hide preview item from Queue display so the user's queue is completely unaffected
+				filtered := make([]player.PlaylistItem, 0, len(state.Playlist))
+				for _, item := range state.Playlist {
+					if item.ID != m.previewEntryID {
+						filtered = append(filtered, item)
+					}
+				}
+				q.SetPlaylist(filtered, m.previewSavedPos)
+			} else {
+				q.SetPlaylist(state.Playlist, state.PlaylistPos)
+			}
 		}
 		return m, m.listenPlayerEvents()
 
@@ -303,7 +377,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Handle modals first
+		// Handle inline search first if actively typing query
+		if m.searching {
+			return m.handleSearchKey(msg)
+		}
+
+		// Handle modals next
 		if m.modalMode != ModalNone {
 			return m.handleModalKey(msg)
 		}
@@ -335,9 +414,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "/":
-			if m.activePanel == panels.PanelLibrary || m.activePanel == panels.PanelQueue {
-				m.modalMode = ModalSearch
-				m.searchBuffer = ""
+			m.searching = true
+			m.searchBuffer = ""
+			if m.statusPanel != nil {
+				m.statusPanel.SetSearchPrompt("/█")
+			}
+			return m, nil
+
+		case "n":
+			m.nextSearchMatch()
+			return m, nil
+
+		case "N":
+			m.prevSearchMatch()
+			return m, nil
+
+		case "esc":
+			if m.hasActiveSearch() {
+				m.clearActiveSearch()
+				return m, nil
 			}
 			return m, nil
 
@@ -379,8 +474,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
 				if !m.fileBrowser.Enter() {
 					if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
-						_ = m.player.LoadFile(item.Path, "replace")
-						_ = m.player.Unpause()
+						m.playPreview(item.Path)
 					}
 				}
 			} else if m.activePanel == panels.PanelQueue {
@@ -627,6 +721,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentPanel().CursorDown()
 			return m, nil
 
+		// Paging
+		case ".":
+			m.currentPanel().PageDown()
+			return m, nil
+		case ",":
+			m.currentPanel().PageUp()
+			return m, nil
+
 		// Yazi-like navigation for File Browser (left: parent directory, right: enter directory / play file)
 		case "left":
 			if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
@@ -638,7 +740,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
 				if !m.fileBrowser.Enter() {
 					if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
-						_ = m.player.LoadFile(item.Path, "replace")
+						m.playPreview(item.Path)
 					}
 				}
 			}
@@ -647,6 +749,50 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "esc":
+		m.searching = false
+		m.searchBuffer = ""
+		if m.statusPanel != nil {
+			m.statusPanel.SetSearchPrompt("")
+		}
+		m.clearActiveSearch()
+		return m, nil
+
+	case "enter":
+		m.searching = false
+		query := strings.TrimSpace(m.searchBuffer)
+		m.searchBuffer = ""
+		if m.statusPanel != nil {
+			m.statusPanel.SetSearchPrompt("")
+		}
+		if query != "" {
+			m.applySearch(query)
+		}
+		return m, nil
+
+	case "backspace":
+		if len(m.searchBuffer) > 0 {
+			m.searchBuffer = m.searchBuffer[:len(m.searchBuffer)-1]
+		}
+		if m.statusPanel != nil {
+			m.statusPanel.SetSearchPrompt("/" + m.searchBuffer + "█")
+		}
+		return m, nil
+
+	default:
+		if len(key) == 1 {
+			m.searchBuffer += key
+			if m.statusPanel != nil {
+				m.statusPanel.SetSearchPrompt("/" + m.searchBuffer + "█")
+			}
+		}
+		return m, nil
+	}
 }
 
 func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -666,27 +812,6 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			max := helppopup.MaxScroll(m.helpSections(), m.height)
 			if m.helpScroll < max {
 				m.helpScroll++
-			}
-		}
-		return m, nil
-
-	case ModalSearch:
-		switch key {
-		case "esc":
-			m.modalMode = ModalNone
-			m.searchBuffer = ""
-			m.applySearchFilter()
-		case "enter":
-			m.modalMode = ModalNone
-		case "backspace":
-			if len(m.searchBuffer) > 0 {
-				m.searchBuffer = m.searchBuffer[:len(m.searchBuffer)-1]
-				m.applySearchFilter()
-			}
-		default:
-			if len(key) == 1 {
-				m.searchBuffer += key
-				m.applySearchFilter()
 			}
 		}
 		return m, nil
@@ -771,16 +896,149 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) applySearchFilter() {
-	if m.activePanel == panels.PanelLibrary {
-		if m.libraryPanel != nil {
-			m.libraryPanel.SetFilterQuery(m.searchBuffer)
+func (m *Model) applySearch(query string) {
+	switch m.activePanel {
+	case panels.PanelPlaylists:
+		if m.playlistsPanel != nil {
+			m.playlistsPanel.Search(query)
 		}
-	} else if m.activePanel == panels.PanelQueue {
+	case panels.PanelFileBrowser:
+		if m.fileBrowser != nil {
+			m.fileBrowser.Search(query)
+		}
+	case panels.PanelLibrary:
+		if m.libraryPanel != nil {
+			m.libraryPanel.Search(query)
+		}
+	case panels.PanelQueue:
 		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
-			q.SetFilterQuery(m.searchBuffer)
+			q.Search(query)
 		}
 	}
+}
+
+func (m *Model) clearActiveSearch() {
+	switch m.activePanel {
+	case panels.PanelPlaylists:
+		if m.playlistsPanel != nil {
+			m.playlistsPanel.ClearSearch()
+		}
+	case panels.PanelFileBrowser:
+		if m.fileBrowser != nil {
+			m.fileBrowser.ClearSearch()
+		}
+	case panels.PanelLibrary:
+		if m.libraryPanel != nil {
+			m.libraryPanel.ClearSearch()
+		}
+	case panels.PanelQueue:
+		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+			q.ClearSearch()
+		}
+	}
+}
+
+func (m *Model) hasActiveSearch() bool {
+	switch m.activePanel {
+	case panels.PanelPlaylists:
+		if m.playlistsPanel != nil {
+			return m.playlistsPanel.HasActiveSearch()
+		}
+	case panels.PanelFileBrowser:
+		if m.fileBrowser != nil {
+			return m.fileBrowser.HasActiveSearch()
+		}
+	case panels.PanelLibrary:
+		if m.libraryPanel != nil {
+			return m.libraryPanel.HasActiveSearch()
+		}
+	case panels.PanelQueue:
+		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+			return q.HasActiveSearch()
+		}
+	}
+	return false
+}
+
+func (m *Model) nextSearchMatch() {
+	switch m.activePanel {
+	case panels.PanelPlaylists:
+		if m.playlistsPanel != nil {
+			m.playlistsPanel.NextMatch()
+		}
+	case panels.PanelFileBrowser:
+		if m.fileBrowser != nil {
+			m.fileBrowser.NextMatch()
+		}
+	case panels.PanelLibrary:
+		if m.libraryPanel != nil {
+			m.libraryPanel.NextMatch()
+		}
+	case panels.PanelQueue:
+		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+			q.NextMatch()
+		}
+	}
+}
+
+func (m *Model) prevSearchMatch() {
+	switch m.activePanel {
+	case panels.PanelPlaylists:
+		if m.playlistsPanel != nil {
+			m.playlistsPanel.PrevMatch()
+		}
+	case panels.PanelFileBrowser:
+		if m.fileBrowser != nil {
+			m.fileBrowser.PrevMatch()
+		}
+	case panels.PanelLibrary:
+		if m.libraryPanel != nil {
+			m.libraryPanel.PrevMatch()
+		}
+	case panels.PanelQueue:
+		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+			q.PrevMatch()
+		}
+	}
+}
+
+func (m *Model) playPreview(filePath string) {
+	if m.player == nil {
+		return
+	}
+
+	state := m.player.GetState()
+
+	// If already in a preview, remove the previous preview entry first
+	// (queried directly from mpv; the cached playlist can be stale).
+	if m.previewing {
+		if idx, err := m.player.PlaylistIndexOfEntry(m.previewEntryID); err == nil && idx >= 0 {
+			_ = m.player.RemoveFromPlaylist(idx)
+		}
+		m.previewing = false
+		m.previewEntryID = 0
+	} else {
+		// Save current queue playback state to resume later
+		m.previewSavedPos = state.PlaylistPos
+		m.previewSavedTime = state.TimePos
+	}
+
+	entryID, err := m.player.AppendFile(filePath)
+	if err != nil || entryID == 0 {
+		return
+	}
+	previewIdx, err := m.player.PlaylistIndexOfEntry(entryID)
+	if err != nil || previewIdx < 0 {
+		return
+	}
+
+	m.previewing = true
+	m.previewStarted = false
+	m.previewEntryID = entryID
+	m.previewPos = previewIdx
+
+	_ = m.player.PlayIndex(previewIdx)
+	_ = m.player.Unpause()
 }
 
 func (m *Model) recalculateLayout() {
@@ -879,10 +1137,6 @@ func (m *Model) renderModalOverlay(base string) string {
 	var title string
 
 	switch m.modalMode {
-	case ModalSearch:
-		title = "Fuzzy Filter"
-		modalContent = fmt.Sprintf("Type to filter:\n\n  /%s█\n\n[Esc: Clear/Close | Enter: Confirm]", m.searchBuffer)
-
 	case ModalAddDir:
 		title = "Add Music Directory"
 		modalContent = fmt.Sprintf("Enter directory path:\n\n  %s█\n\n[Esc: Cancel | Enter: Add & Scan]", m.addDirBuffer)

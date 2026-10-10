@@ -83,19 +83,6 @@ func (p *LibraryPanel) NextTab() {}
 
 func (p *LibraryPanel) PrevTab() {}
 
-func (p *LibraryPanel) filteredDirs() []string {
-	if p.filterQuery == "" {
-		return p.dirs
-	}
-	query := strings.ToLower(p.filterQuery)
-	var filtered []string
-	for _, d := range p.dirs {
-		if strings.Contains(strings.ToLower(d), query) {
-			filtered = append(filtered, d)
-		}
-	}
-	return filtered
-}
 
 func (p *LibraryPanel) CursorUp() {
 	if p.cursor > 0 {
@@ -104,28 +91,82 @@ func (p *LibraryPanel) CursorUp() {
 }
 
 func (p *LibraryPanel) CursorDown() {
-	list := p.filteredDirs()
-	if p.cursor < len(list)-1 {
+	if p.cursor < len(p.dirs)-1 {
 		p.cursor++
 	}
 }
 
-// SetFilterQuery sets the fuzzy filter string.
-func (p *LibraryPanel) SetFilterQuery(query string) {
+func (p *LibraryPanel) PageUp()   { p.cursor = pageMove(p.cursor, len(p.dirs), p.height, -1) }
+func (p *LibraryPanel) PageDown() { p.cursor = pageMove(p.cursor, len(p.dirs), p.height, 1) }
+
+// Search sets query as the active search and jumps cursor to nearest match.
+func (p *LibraryPanel) Search(query string) bool {
 	p.filterQuery = query
-	p.cursor = 0
+	i, ok := p.findMatch(p.cursor, 1, true)
+	if ok {
+		p.cursor = i
+	}
+	return ok
 }
 
-// FilterQuery returns the current filter query.
-func (p *LibraryPanel) FilterQuery() string {
-	return p.filterQuery
+// ClearSearch discards the active search query.
+func (p *LibraryPanel) ClearSearch() {
+	p.filterQuery = ""
+}
+
+// HasActiveSearch reports whether a search query is active.
+func (p *LibraryPanel) HasActiveSearch() bool {
+	return p.filterQuery != ""
+}
+
+// NextMatch moves cursor to next match forward.
+func (p *LibraryPanel) NextMatch() bool {
+	if p.filterQuery == "" {
+		return false
+	}
+	i, ok := p.findMatch(p.cursor, 1, false)
+	if ok {
+		p.cursor = i
+	}
+	return ok
+}
+
+// PrevMatch moves cursor to previous match backward.
+func (p *LibraryPanel) PrevMatch() bool {
+	if p.filterQuery == "" {
+		return false
+	}
+	i, ok := p.findMatch(p.cursor, -1, false)
+	if ok {
+		p.cursor = i
+	}
+	return ok
+}
+
+func (p *LibraryPanel) findMatch(start, direction int, includeStart bool) (int, bool) {
+	n := len(p.dirs)
+	if n == 0 || p.filterQuery == "" {
+		return 0, false
+	}
+	i := start
+	if !includeStart {
+		i += direction
+	}
+	i = ((i % n) + n) % n
+	lowerQ := strings.ToLower(p.filterQuery)
+	for step := 0; step < n; step++ {
+		if strings.Contains(strings.ToLower(p.dirs[i]), lowerQ) {
+			return i, true
+		}
+		i = ((i+direction)%n + n) % n
+	}
+	return 0, false
 }
 
 // SelectedDir returns the currently highlighted directory path.
 func (p *LibraryPanel) SelectedDir() (string, bool) {
-	filtered := p.filteredDirs()
-	if p.cursor >= 0 && p.cursor < len(filtered) {
-		return filtered[p.cursor], true
+	if p.cursor >= 0 && p.cursor < len(p.dirs) {
+		return p.dirs[p.cursor], true
 	}
 	return "", false
 }
@@ -144,7 +185,6 @@ func (p *LibraryPanel) View() string {
 		innerHeight = 0
 	}
 
-	currentItems := p.filteredDirs()
 	var lines []string
 
 	scrollMargin := 2
@@ -162,7 +202,7 @@ func (p *LibraryPanel) View() string {
 		}
 	}
 
-	if maxOffset := len(currentItems) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
+	if maxOffset := len(p.dirs) - innerHeight; maxOffset >= 0 && p.offset > maxOffset {
 		p.offset = maxOffset
 	}
 	if p.offset < 0 {
@@ -172,25 +212,31 @@ func (p *LibraryPanel) View() string {
 
 	home, _ := os.UserHomeDir()
 
-	if len(currentItems) == 0 {
+	if len(p.dirs) == 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [No music directories configured - press 'a' to add]"))
 	} else {
-		for i := offset; i < len(currentItems) && len(lines) < innerHeight; i++ {
-			item := currentItems[i]
+		for i := offset; i < len(p.dirs) && len(lines) < innerHeight; i++ {
+			item := p.dirs[i]
 			displayPath := item
 			if strings.HasPrefix(displayPath, home) {
 				displayPath = "~" + strings.TrimPrefix(displayPath, home)
 			}
 			truncated := theme.TruncateLine(displayPath, innerWidth-1)
-			lineStr := fmt.Sprintf(" %-*s", innerWidth-1, truncated)
 
+			rowBaseStyle := lipgloss.NewStyle()
 			if i == p.cursor && p.focused {
-				lines = append(lines, theme.CursorRowStyle.Render(lineStr))
+				rowBaseStyle = theme.CursorRowStyle
 			} else if i == p.cursor && !p.focused {
-				lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
-			} else {
-				lines = append(lines, lineStr)
+				rowBaseStyle = lipgloss.NewStyle().Bold(true)
 			}
+
+			renderedPath := theme.RenderWithMatches(truncated, p.filterQuery, rowBaseStyle, i == p.cursor)
+			pad := (innerWidth - 1) - len([]rune(truncated))
+			if pad < 0 {
+				pad = 0
+			}
+			lineStr := fmt.Sprintf(" %s%s", renderedPath, rowBaseStyle.Render(strings.Repeat(" ", pad)))
+			lines = append(lines, lineStr)
 		}
 	}
 
@@ -201,8 +247,8 @@ func (p *LibraryPanel) View() string {
 	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
 
 	var footer string
-	if len(currentItems) > 0 {
-		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(currentItems))
+	if len(p.dirs) > 0 {
+		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(p.dirs))
 	}
 	if p.filterQuery != "" {
 		footer = "/" + p.filterQuery + " " + footer

@@ -26,6 +26,29 @@ type Panel interface {
 	PrevTab()
 	CursorUp()
 	CursorDown()
+	PageUp()
+	PageDown()
 	Update(msg tea.Msg) (Panel, tea.Cmd)
 	View() string
+}
+
+// pageMove returns the cursor after moving one page (direction +1/-1) within
+// a list of n items, given the panel's outer height. A page is the number of
+// visible rows minus one so a line of context stays on screen.
+func pageMove(cursor, n, height, direction int) int {
+	if n <= 0 {
+		return 0
+	}
+	step := height - 2 - 1
+	if step < 1 {
+		step = 1
+	}
+	cursor += direction * step
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > n-1 {
+		cursor = n - 1
+	}
+	return cursor
 }
