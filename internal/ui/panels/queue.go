@@ -169,6 +169,30 @@ func (p *QueuePanel) Playlist() []player.PlaylistItem {
 	return res
 }
 
+// Len returns the number of tracks in the playlist.
+func (p *QueuePanel) Len() int {
+	return len(p.playlist)
+}
+
+// Move moves an item in the queue playlist from one index to another,
+// keeping local state and currentPos in sync optimistically.
+func (p *QueuePanel) Move(from, to int) {
+	if from < 0 || from >= len(p.playlist) || to < 0 || to >= len(p.playlist) || from == to {
+		return
+	}
+	item := p.playlist[from]
+	p.playlist = append(p.playlist[:from], p.playlist[from+1:]...)
+	p.playlist = append(p.playlist[:to], append([]player.PlaylistItem{item}, p.playlist[to:]...)...)
+
+	if p.currentPos == from {
+		p.currentPos = to
+	} else if from < to && p.currentPos > from && p.currentPos <= to {
+		p.currentPos--
+	} else if from > to && p.currentPos >= to && p.currentPos < from {
+		p.currentPos++
+	}
+}
+
 // CurrentPos returns current playlist playing index.
 func (p *QueuePanel) CurrentPos() int {
 	return p.currentPos

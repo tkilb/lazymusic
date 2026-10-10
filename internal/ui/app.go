@@ -556,12 +556,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		// Shift+Up: Move track up in queue
-		case "shift+up":
+		case "shift+up", "ctrl+shift+up":
 			if m.activePanel == panels.PanelQueue && m.player != nil {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
 					idx := q.Cursor()
-					if idx > 0 {
+					if idx > 0 && idx < q.Len() {
 						_ = m.player.MoveInPlaylist(idx, idx-1)
+						q.Move(idx, idx-1)
 						q.CursorUp()
 					}
 				}
@@ -569,12 +570,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		// Shift+Down: Move track down in queue
-		case "shift+down":
+		case "shift+down", "ctrl+shift+down":
 			if m.activePanel == panels.PanelQueue && m.player != nil {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
 					idx := q.Cursor()
-					_ = m.player.MoveInPlaylist(idx, idx+1)
-					q.CursorDown()
+					if idx >= 0 && idx < q.Len()-1 {
+						_ = m.player.MoveInPlaylist(idx, idx+1)
+						q.Move(idx, idx+1)
+						q.CursorDown()
+					}
 				}
 			}
 			return m, nil

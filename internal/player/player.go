@@ -465,8 +465,19 @@ func (c *Client) RemoveFromPlaylist(index int) error {
 }
 
 // MoveInPlaylist moves the track at oldIndex to newIndex in mpv's playlist.
+// In mpv, playlist-move moves an entry to take the place of the target entry.
+// When moving an entry forward (oldIndex < newIndex), removing oldIndex shifts
+// subsequent items down by 1, so mpv requires target index newIndex + 1 to place
+// it at newIndex.
 func (c *Client) MoveInPlaylist(oldIndex, newIndex int) error {
-	_, err := c.sendCommand("playlist-move", oldIndex, newIndex)
+	if oldIndex < 0 || newIndex < 0 || oldIndex == newIndex {
+		return nil
+	}
+	mpvTarget := newIndex
+	if oldIndex < newIndex {
+		mpvTarget = newIndex + 1
+	}
+	_, err := c.sendCommand("playlist-move", oldIndex, mpvTarget)
 	return err
 }
 
