@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tylerkilburn/lazymusic/internal/config"
+	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui"
 )
 
@@ -16,7 +17,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	m := ui.NewModel(cfg)
+	pClient := player.NewClient(cfg.SocketPath)
+	if err := pClient.Connect(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not connect to mpv daemon (%v). Starting in offline mode.\n", err)
+	}
+
+	m := ui.NewModel(cfg, pClient)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

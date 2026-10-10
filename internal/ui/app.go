@@ -4,26 +4,32 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/config"
+	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/panels"
 )
 
 // Model represents the main Bubble Tea model for lazymusic.
 type Model struct {
-	cfg          *config.Config
-	width        int
-	height       int
-	activePanel  panels.PanelID
-	leftPanels   []panels.Panel
-	queuePanel   panels.Panel
-	statusPanel  *panels.StatusPanel
+	cfg           *config.Config
+	player        *player.Client
+	width         int
+	height        int
+	activePanel   panels.PanelID
+	leftPanels    []panels.Panel
+	queuePanel    panels.Panel
+	statusPanel   *panels.StatusPanel
 	lastLeftFocus panels.PanelID
 }
 
+// PlaybackMsg wraps player state updates for Bubble Tea.
+type PlaybackMsg player.PlaybackState
+
 // NewModel initializes the TUI model.
-func NewModel(cfg *config.Config) *Model {
+func NewModel(cfg *config.Config, pClient *player.Client) *Model {
 	m := &Model{
-		cfg:          cfg,
-		activePanel:  panels.PanelLibrary,
+		cfg:           cfg,
+		player:        pClient,
+		activePanel:   panels.PanelLibrary,
 		lastLeftFocus: panels.PanelLibrary,
 		leftPanels: []panels.Panel{
 			panels.NewLibraryPanel(),
@@ -38,7 +44,17 @@ func NewModel(cfg *config.Config) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return nil
+	return m.listenPlayerEvents()
+}
+
+func (m *Model) listenPlayerEvents() tea.Cmd {
+	return func() tea.Msg {
+		if m.player == nil {
+			return nil
+		}
+		state := <-m.player.Events()
+		return PlaybackMsg(state)
+	}
 }
 
 func (m *Model) updateFocus() {
@@ -70,6 +86,10 @@ func (m *Model) currentPanel() panels.Panel {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case PlaybackMsg:
+		m.statusPanel.SetPlaybackState(player.PlaybackState(msg))
+		return m, m.listenPlayerEvents()
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -78,8 +98,62 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
+			if m.player != nil {
+				_ = m.player.Detach()
+			}
 			return m, tea.Quit
+
+		// Detach and quit (mpv continues playing in background)
+		case "q":
+			if m.player != nil {
+				_ = m.player.Detach()
+			}
+			return m, tea.Quit
+
+		// Stop daemon and quit completely
+		case "Q":
+			if m.player != nil {
+				_ = m.player.QuitDaemon()
+			}
+			return m, tea.Quit
+
+		// Playback controls
+		case " ":
+			if m.player != nil {
+				_ = m.player.TogglePause()
+			}
+			return m, nil
+		case ">":
+			if m.player != nil {
+				_ = m.player.Next()
+			}
+			return m, nil
+		case "<":
+			if m.player != nil {
+				_ = m.player.Prev()
+			}
+			return m, nil
+		case "+", "=":
+			if m.player != nil {
+				_ = m.player.VolumeUp()
+			}
+			return m, nil
+		case "-", "_":
+			if m.player != nil {
+				_ = m.player.VolumeDown()
+			}
+			return m, nil
+		case "alt+right":
+			if m.player != nil {
+				_ = m.player.SeekRelative(5)
+			}
+			return m, nil
+		case "alt+left":
+			if m.player != nil {
+				_ = m.player.SeekRelative(-5)
+			}
+			return m, nil
 
 		// Direct panel navigation
 		case "0":

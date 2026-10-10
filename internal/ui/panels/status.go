@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
@@ -27,17 +28,52 @@ type StatusPanel struct {
 // NewStatusPanel creates a new StatusPanel instance.
 func NewStatusPanel() *StatusPanel {
 	return &StatusPanel{
-		isPlaying: true,
-		title:     "Paranoid Android",
-		artist:    "Radiohead",
-		album:     "OK Computer",
-		year:      "1997",
-		format:    "FLAC 24-bit 96kHz",
-		currTime:  "03:12",
-		totalTime: "06:23",
-		percent:   0.50,
-		volume:    85,
+		isPlaying: false,
+		title:     "No track loaded",
+		artist:    "-",
+		album:     "-",
+		year:      "-",
+		format:    "-",
+		currTime:  "00:00",
+		totalTime: "00:00",
+		percent:   0.0,
+		volume:    100,
 	}
+}
+
+func (s *StatusPanel) SetPlaybackState(state player.PlaybackState) {
+	s.isPlaying = state.IsPlaying
+	if state.MediaTitle != "" {
+		s.title = state.MediaTitle
+	} else if state.IdleActive {
+		s.title = "Idle (Queue empty)"
+	}
+	if state.Artist != "" {
+		s.artist = state.Artist
+	}
+	if state.Album != "" {
+		s.album = state.Album
+	}
+	if state.AudioCodec != "" {
+		s.format = strings.ToUpper(state.AudioCodec)
+	}
+	s.currTime = formatDuration(state.TimePos)
+	s.totalTime = formatDuration(state.Duration)
+	if state.Duration > 0 {
+		s.percent = state.TimePos / state.Duration
+	} else {
+		s.percent = 0.0
+	}
+	s.volume = int(state.Volume)
+}
+
+func formatDuration(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	m := int(seconds) / 60
+	sec := int(seconds) % 60
+	return fmt.Sprintf("%02d:%02d", m, sec)
 }
 
 func (s *StatusPanel) SetSize(w, h int) {
