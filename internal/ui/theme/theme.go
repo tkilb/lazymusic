@@ -168,14 +168,15 @@ func topBorderWithRight(title, topRight string, width int, focused bool, lineSty
 	const leadDashes = 2
 	const trailDashes = 1
 	label := title
-	if len([]rune(label)) > width-5 {
-		label = string([]rune(label)[:width-5])
+	if lipgloss.Width(label) > width-5 {
+		label = TruncateLine(label, width-5)
 	}
 
 	renderedLabel := label + " "
-	usedLeft := leadDashes + len([]rune(renderedLabel))
+	usedLeft := leadDashes + lipgloss.Width(renderedLabel)
+	rightWidth := lipgloss.Width(topRight)
 
-	if topRight == "" || width-usedLeft-len([]rune(topRight))-trailDashes-1 < 0 {
+	if topRight == "" || width-usedLeft-rightWidth-trailDashes-1 < 0 {
 		fill := width - usedLeft
 		if fill < 0 {
 			fill = 0
@@ -187,18 +188,16 @@ func topBorderWithRight(title, topRight string, width int, focused bool, lineSty
 		return b.String()
 	}
 
-	fill := width - usedLeft - len([]rune(topRight)) - trailDashes - 1
+	fill := width - usedLeft - rightWidth - trailDashes - 1
 	if fill < 0 {
 		fill = 0
 	}
-
-	warningStyle := lipgloss.NewStyle().Foreground(PaletteRed)
 
 	var b strings.Builder
 	b.WriteString(lineStyle.Render("╭" + strings.Repeat("─", leadDashes)))
 	b.WriteString(TitleStyle(focused).Render(renderedLabel))
 	b.WriteString(lineStyle.Render(strings.Repeat("─", fill)))
-	b.WriteString(warningStyle.Render(" " + topRight))
+	b.WriteString(" " + topRight)
 	b.WriteString(lineStyle.Render(strings.Repeat("─", trailDashes) + "╮"))
 	return b.String()
 }

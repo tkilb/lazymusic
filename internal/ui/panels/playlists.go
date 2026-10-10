@@ -295,9 +295,13 @@ func (p *PlaylistsPanel) View() string {
 		footer = "/" + p.searchQuery + " " + footer
 	}
 
+	warning := ""
 	if p.depWarning != "" {
 		p.depWarning = player.CheckMediaDependencies()
+		if p.depWarning != "" {
+			warning = lipgloss.NewStyle().Foreground(theme.PaletteRed).Bold(true).Render(p.depWarning)
+		}
 	}
 
-	return theme.FrameWithTopRight("[1] Playlists", p.depWarning, body, innerWidth, innerHeight, p.focused, footer)
+	return theme.FrameWithTopRight("[1] Playlists", warning, body, innerWidth, innerHeight, p.focused, footer)
 }

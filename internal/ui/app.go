@@ -115,6 +115,8 @@ var globalHelpBindings = []statusbar.Binding{
 	{Key: "+ / =", Label: "volume up"},
 	{Key: "- / _", Label: "volume down"},
 	{Key: "Shift+←/→", Label: "seek backward / forward 5s"},
+	{Key: "l", Label: "toggle loop current song"},
+	{Key: "L", Label: "toggle loop entire queue"},
 	{Key: "?", Label: "keybindings reference"},
 	{Key: "q", Label: "detach (keep mpv playing in background)"},
 	{Key: "Q", Label: "stop mpv daemon and quit"},
@@ -151,6 +153,7 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "d", Label: "remove"},
 			{Key: "D", Label: "clear"},
 			{Key: "s", Label: "shuffle"},
+			{Key: "l/L", Label: "loop"},
 			{Key: "Shift+↑/↓", Label: "reorder"},
 			{Key: "/", Label: "search"},
 		}
@@ -194,6 +197,8 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "Shift+↑", Label: "move selected track up in queue"},
 			{Key: "Shift+↓", Label: "move selected track down in queue"},
 			{Key: "s", Label: "shuffle queue"},
+			{Key: "l", Label: "toggle loop single song"},
+			{Key: "L", Label: "toggle loop entire queue"},
 			{Key: "/", Label: "search tracks in queue"},
 		}
 	}
@@ -355,6 +360,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+			q.SetLoop(state.LoopFile, state.LoopPlaylist)
 			if m.previewing && m.previewEntryID > 0 {
 				// Hide preview item from Queue display so the user's queue is completely unaffected
 				filtered := make([]player.PlaylistItem, 0, len(state.Playlist))
@@ -587,6 +593,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			if m.player != nil {
 				_ = m.player.ShufflePlaylist()
+			}
+			return m, nil
+
+		// l: Toggle loop single song
+		case "l":
+			if m.player != nil {
+				_ = m.player.ToggleLoopFile()
+			}
+			return m, nil
+
+		// L: Toggle loop entire queue
+		case "L":
+			if m.player != nil {
+				_ = m.player.ToggleLoopPlaylist()
 			}
 			return m, nil
 

@@ -38,6 +38,8 @@ type PlaybackState struct {
 	IdleActive   bool
 	Playlist     []PlaylistItem
 	PlaylistPos  int
+	LoopFile     bool
+	LoopPlaylist bool
 }
 
 // Client manages the IPC connection to the mpv background daemon.
@@ -299,6 +301,28 @@ func (c *Client) handlePropertyChange(name string, val interface{}) {
 			c.state.Playlist = items
 			changed = true
 		}
+	case "loop-file":
+		loop := false
+		if b, ok := val.(bool); ok {
+			loop = b
+		} else if s, ok := val.(string); ok {
+			loop = s == "inf" || s == "yes"
+		} else if f, ok := val.(float64); ok {
+			loop = f > 0
+		}
+		c.state.LoopFile = loop
+		changed = true
+	case "loop-playlist":
+		loop := false
+		if b, ok := val.(bool); ok {
+			loop = b
+		} else if s, ok := val.(string); ok {
+			loop = s == "inf" || s == "yes" || s == "force"
+		} else if f, ok := val.(float64); ok {
+			loop = f > 0
+		}
+		c.state.LoopPlaylist = loop
+		changed = true
 	}
 
 	snapshot := c.state
@@ -324,6 +348,8 @@ func (c *Client) observeProperties() {
 		"audio-codec-name",
 		"playlist",
 		"playlist-pos",
+		"loop-file",
+		"loop-playlist",
 	}
 	for i, prop := range props {
 		_, _ = c.sendCommand("observe_property", i+1, prop)
@@ -343,6 +369,8 @@ func (c *Client) syncInitialState() {
 			"audio-codec-name",
 			"playlist",
 			"playlist-pos",
+			"loop-file",
+			"loop-playlist",
 		}
 		for _, prop := range props {
 			resp, err := c.sendCommand("get_property", prop)
@@ -490,6 +518,38 @@ func (c *Client) ClearPlaylist() error {
 // ShufflePlaylist shuffles mpv's playlist.
 func (c *Client) ShufflePlaylist() error {
 	_, err := c.sendCommand("playlist-shuffle")
+	return err
+}
+
+// ToggleLoopFile toggles looping the current song.
+func (c *Client) ToggleLoopFile() error {
+	c.stateMu.RLock()
+	current := c.state.LoopFile
+	c.stateMu.RUnlock()
+
+	if current {
+		_, err := c.sendCommand("set_property", "loop-file", "no")
+		return err
+	}
+	// Turn off queue loop when enabling single song loop
+	_, _ = c.sendCommand("set_property", "loop-playlist", "no")
+	_, err := c.sendCommand("set_property", "loop-file", "inf")
+	return err
+}
+
+// ToggleLoopPlaylist toggles looping the entire queue.
+func (c *Client) ToggleLoopPlaylist() error {
+	c.stateMu.RLock()
+	current := c.state.LoopPlaylist
+	c.stateMu.RUnlock()
+
+	if current {
+		_, err := c.sendCommand("set_property", "loop-playlist", "no")
+		return err
+	}
+	// Turn off single song loop when enabling queue loop
+	_, _ = c.sendCommand("set_property", "loop-file", "no")
+	_, err := c.sendCommand("set_property", "loop-playlist", "inf")
 	return err
 }
 

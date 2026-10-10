@@ -19,8 +19,10 @@ type QueuePanel struct {
 	cursor      int
 	offset      int
 	playlist    []player.PlaylistItem
-	currentPos  int
-	filterQuery string
+	currentPos   int
+	filterQuery  string
+	loopFile     bool
+	loopPlaylist bool
 }
 
 // NewQueuePanel creates a new QueuePanel instance.
@@ -162,6 +164,12 @@ func (p *QueuePanel) SetPlaylist(items []player.PlaylistItem, currentPos int) {
 	}
 }
 
+// SetLoop updates the loop states for song and queue.
+func (p *QueuePanel) SetLoop(loopFile, loopPlaylist bool) {
+	p.loopFile = loopFile
+	p.loopPlaylist = loopPlaylist
+}
+
 // Playlist returns a copy of current playlist items.
 func (p *QueuePanel) Playlist() []player.PlaylistItem {
 	res := make([]player.PlaylistItem, len(p.playlist))
@@ -260,12 +268,17 @@ func (p *QueuePanel) View() string {
 				playingIndicator = "▶ "
 			}
 
+			displayTitle := title
+			if (item.Current || item.Playing) && p.loopFile {
+				displayTitle += " [loop]"
+			}
+
 			prefix := fmt.Sprintf("%s%2d. ", playingIndicator, i+1)
 			availableWidth := innerWidth - len(prefix) - 1
 			if availableWidth < 0 {
 				availableWidth = 0
 			}
-			truncatedTitle := theme.TruncateLine(title, availableWidth)
+			truncatedTitle := theme.TruncateLine(displayTitle, availableWidth)
 
 			rowBaseStyle := lipgloss.NewStyle()
 			if i == p.cursor && p.focused {
@@ -298,5 +311,12 @@ func (p *QueuePanel) View() string {
 		footer = "/" + p.filterQuery + " " + footer
 	}
 
-	return theme.Frame("[0] Queue", body, innerWidth, innerHeight, p.focused, footer)
+	var loopIndicator string
+	if p.loopFile {
+		loopIndicator = lipgloss.NewStyle().Foreground(theme.PaletteCyan).Bold(true).Render("[Loop: Song]")
+	} else if p.loopPlaylist {
+		loopIndicator = lipgloss.NewStyle().Foreground(theme.PaletteCyan).Bold(true).Render("[Loop: Queue]")
+	}
+
+	return theme.FrameWithTopRight("[0] Queue", loopIndicator, body, innerWidth, innerHeight, p.focused, footer)
 }

@@ -112,7 +112,8 @@ flowchart TD
 | `+` / `-` | Global | Volume Up / Down (steps of 5%) |
 | `m` | Global | Toggle Mute |
 | `s` | Global | Toggle Shuffle |
-| `r` | Global | Cycle Repeat (Off → All → Single) |
+| `l` | Global | Toggle Loop Song (single track) |
+| `L` | Global | Toggle Loop Queue (entire playlist) |
 | `Shift+←` / `Shift+→` | Global | Seek backward / forward (5 seconds) |
 | `/` | Active Panel | Open fuzzy filter search prompt |
 | `e` | Active Panel | Edit metadata tags (ID3 / Vorbis) |

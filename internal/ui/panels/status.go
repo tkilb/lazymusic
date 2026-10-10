@@ -25,6 +25,8 @@ type StatusPanel struct {
 	totalTime    string
 	percent      float64
 	volume       int
+	loopFile     bool
+	loopPlaylist bool
 	bindings     []statusbar.Binding
 	searchPrompt string
 }
@@ -77,6 +79,8 @@ func (s *StatusPanel) SetPlaybackState(state player.PlaybackState) {
 		s.percent = 0.0
 	}
 	s.volume = int(state.Volume)
+	s.loopFile = state.LoopFile
+	s.loopPlaylist = state.LoopPlaylist
 }
 
 func formatDuration(seconds float64) string {
@@ -112,9 +116,17 @@ func (s *StatusPanel) View() string {
 		stateIcon = "⏸ Paused"
 	}
 
-	// Line 1: [State] Title • Artist • Album (Year)
-	trackInfo := fmt.Sprintf(" [%s] %s • %s • %s (%s)",
+	loopTag := ""
+	if s.loopFile {
+		loopTag = " " + lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteCyan).Render("[Loop: Song]")
+	} else if s.loopPlaylist {
+		loopTag = " " + lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteCyan).Render("[Loop: Queue]")
+	}
+
+	// Line 1: [State] [Loop] Title • Artist • Album (Year)
+	trackInfo := fmt.Sprintf(" [%s]%s %s • %s • %s (%s)",
 		lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteGreen).Render(stateIcon),
+		loopTag,
 		lipgloss.NewStyle().Bold(true).Render(s.title),
 		s.artist,
 		s.album,
