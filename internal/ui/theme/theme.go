@@ -104,7 +104,14 @@ func TitleStyle(focused bool) lipgloss.Style {
 // e.g. "╭─[1] Library─────╮"
 func Frame(title, body string, width, height int, focused bool, footer ...string) string {
 	lineStyle := lipgloss.NewStyle().Foreground(BorderColor(focused))
-	top := topBorder(title, width, focused, lineStyle)
+	top := topBorderWithRight(title, "", width, focused, lineStyle)
+	return frameBody(top, firstFooter(footer), body, width, height, lineStyle)
+}
+
+// FrameWithTopRight renders a panel with title on the left and a status/warning label on the top right.
+func FrameWithTopRight(title, topRight, body string, width, height int, focused bool, footer ...string) string {
+	lineStyle := lipgloss.NewStyle().Foreground(BorderColor(focused))
+	top := topBorderWithRight(title, topRight, width, focused, lineStyle)
 	return frameBody(top, firstFooter(footer), body, width, height, lineStyle)
 }
 
@@ -154,23 +161,45 @@ func frameBody(top, footer, body string, width, height int, lineStyle lipgloss.S
 }
 
 func topBorder(title string, width int, focused bool, lineStyle lipgloss.Style) string {
+	return topBorderWithRight(title, "", width, focused, lineStyle)
+}
+
+func topBorderWithRight(title, topRight string, width int, focused bool, lineStyle lipgloss.Style) string {
 	const leadDashes = 2
+	const trailDashes = 1
 	label := title
-	if len(label) > width-5 {
-		label = label[:width-5]
+	if len([]rune(label)) > width-5 {
+		label = string([]rune(label)[:width-5])
 	}
 
-	// Add trailing space for visual separation from the border line
 	renderedLabel := label + " "
-	fill := width - leadDashes - len(renderedLabel)
+	usedLeft := leadDashes + len([]rune(renderedLabel))
+
+	if topRight == "" || width-usedLeft-len([]rune(topRight))-trailDashes-1 < 0 {
+		fill := width - usedLeft
+		if fill < 0 {
+			fill = 0
+		}
+		var b strings.Builder
+		b.WriteString(lineStyle.Render("╭" + strings.Repeat("─", leadDashes)))
+		b.WriteString(TitleStyle(focused).Render(renderedLabel))
+		b.WriteString(lineStyle.Render(strings.Repeat("─", fill) + "╮"))
+		return b.String()
+	}
+
+	fill := width - usedLeft - len([]rune(topRight)) - trailDashes - 1
 	if fill < 0 {
 		fill = 0
 	}
 
+	warningStyle := lipgloss.NewStyle().Foreground(PaletteRed)
+
 	var b strings.Builder
 	b.WriteString(lineStyle.Render("╭" + strings.Repeat("─", leadDashes)))
 	b.WriteString(TitleStyle(focused).Render(renderedLabel))
-	b.WriteString(lineStyle.Render(strings.Repeat("─", fill) + "╮"))
+	b.WriteString(lineStyle.Render(strings.Repeat("─", fill)))
+	b.WriteString(warningStyle.Render(" " + topRight))
+	b.WriteString(lineStyle.Render(strings.Repeat("─", trailDashes) + "╮"))
 	return b.String()
 }
 

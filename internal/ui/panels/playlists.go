@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
@@ -28,6 +29,7 @@ type PlaylistsPanel struct {
 	playlistsDir string
 	items        []PlaylistItemFile
 	searchQuery  string
+	depWarning   string
 }
 
 // NewPlaylistsPanel creates a new PlaylistsPanel reading from playlistsDir.
@@ -71,6 +73,7 @@ func (p *PlaylistsPanel) Refresh() {
 	if p.cursor < 0 {
 		p.cursor = 0
 	}
+	p.depWarning = player.CheckMediaDependencies()
 }
 
 func (p *PlaylistsPanel) ID() PanelID {
@@ -292,5 +295,9 @@ func (p *PlaylistsPanel) View() string {
 		footer = "/" + p.searchQuery + " " + footer
 	}
 
-	return theme.Frame("[1] Playlists", body, innerWidth, innerHeight, p.focused, footer)
+	if p.depWarning != "" {
+		p.depWarning = player.CheckMediaDependencies()
+	}
+
+	return theme.FrameWithTopRight("[1] Playlists", p.depWarning, body, innerWidth, innerHeight, p.focused, footer)
 }
