@@ -113,7 +113,7 @@ flowchart TD
 | `m` | Global | Toggle Mute |
 | `s` | Global | Toggle Shuffle |
 | `r` | Global | Cycle Repeat (Off → All → Single) |
-| `Alt+←` / `Alt+→` | Global | Seek backward / forward (5 seconds) |
+| `Shift+←` / `Shift+→` | Global | Seek backward / forward (5 seconds) |
 | `/` | Active Panel | Open fuzzy filter search prompt |
 | `e` | Active Panel | Edit metadata tags (ID3 / Vorbis) |
 | `q` | Global | Detach and quit (mpv continues playing) |

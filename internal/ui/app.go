@@ -9,7 +9,9 @@ import (
 	"github.com/tylerkilburn/lazymusic/internal/config"
 	"github.com/tylerkilburn/lazymusic/internal/library"
 	"github.com/tylerkilburn/lazymusic/internal/player"
+	"github.com/tylerkilburn/lazymusic/internal/ui/helppopup"
 	"github.com/tylerkilburn/lazymusic/internal/ui/panels"
+	"github.com/tylerkilburn/lazymusic/internal/ui/statusbar"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
@@ -37,6 +39,7 @@ type Model struct {
 
 	// Modal states
 	modalMode    ModalMode
+	helpScroll   int
 	searchBuffer string
 	tagTrackPath string
 	tagTitle     string
@@ -72,7 +75,135 @@ func NewModel(cfg *config.Config, pClient *player.Client, storage *library.Stora
 		modalMode:   ModalNone,
 	}
 	m.updateFocus()
+	m.updateStatusBar()
 	return m
+}
+
+var globalStatusBindings = []statusbar.Binding{
+	{Key: "Space", Label: "pause"},
+	{Key: ">/<", Label: "next/prev"},
+	{Key: "+/-", Label: "vol"},
+	{Key: "q", Label: "detach"},
+	{Key: "?", Label: "help"},
+}
+
+var globalHelpBindings = []statusbar.Binding{
+	{Key: "Space", Label: "toggle play / pause"},
+	{Key: ">", Label: "next track"},
+	{Key: "<", Label: "previous track"},
+	{Key: "+ / =", Label: "volume up"},
+	{Key: "- / _", Label: "volume down"},
+	{Key: "Shift+←/→", Label: "seek backward / forward 5s"},
+	{Key: "?", Label: "keybindings reference"},
+	{Key: "q", Label: "detach (keep mpv playing in background)"},
+	{Key: "Q", Label: "stop mpv daemon and quit"},
+}
+
+func (m *Model) statusBindings() []statusbar.Binding {
+	var local []statusbar.Binding
+	switch m.activePanel {
+	case panels.PanelLibrary:
+		local = []statusbar.Binding{
+			{Key: "Enter", Label: "play"},
+			{Key: "a", Label: "queue"},
+			{Key: "/", Label: "filter"},
+			{Key: "e", Label: "tag edit"},
+			{Key: "[/]", Label: "tabs"},
+		}
+	case panels.PanelPlaylists:
+		local = []statusbar.Binding{
+			{Key: "Enter", Label: "load"},
+			{Key: "a", Label: "queue"},
+		}
+	case panels.PanelFileBrowser:
+		local = []statusbar.Binding{
+			{Key: "→/Enter", Label: "open"},
+			{Key: "←", Label: "back"},
+			{Key: "a", Label: "queue"},
+		}
+	case panels.PanelQueue:
+		local = []statusbar.Binding{
+			{Key: "Space/Enter", Label: "play"},
+			{Key: "d", Label: "remove"},
+			{Key: "D", Label: "clear"},
+			{Key: "s", Label: "shuffle"},
+			{Key: "Shift+↑/↓", Label: "reorder"},
+			{Key: "/", Label: "filter"},
+		}
+	}
+
+	res := make([]statusbar.Binding, 0, len(local)+len(globalStatusBindings))
+	res = append(res, local...)
+	res = append(res, globalStatusBindings...)
+	return res
+}
+
+func (m *Model) helpLocalBindings() []statusbar.Binding {
+	switch m.activePanel {
+	case panels.PanelLibrary:
+		return []statusbar.Binding{
+			{Key: "Enter", Label: "play selected track immediately"},
+			{Key: "a", Label: "append selected track to queue"},
+			{Key: "/", Label: "open live fuzzy filter search"},
+			{Key: "e", Label: "edit ID3v2 metadata tags for selected track"},
+			{Key: "[ / ]", Label: "switch sub-tab (Dirs / Artists / Albums / Tracks)"},
+		}
+	case panels.PanelPlaylists:
+		return []statusbar.Binding{
+			{Key: "Enter", Label: "load playlist (replaces queue)"},
+			{Key: "a", Label: "append all playlist tracks to queue"},
+		}
+	case panels.PanelFileBrowser:
+		return []statusbar.Binding{
+			{Key: "→ / Enter", Label: "enter directory or play selected audio file"},
+			{Key: "←", Label: "go back to previous directory (Yazi-style)"},
+			{Key: "a", Label: "append selected audio file to queue"},
+		}
+	case panels.PanelQueue:
+		return []statusbar.Binding{
+			{Key: "Space / Enter", Label: "play selected track (or pause if currently playing)"},
+			{Key: "d", Label: "remove selected track from queue"},
+			{Key: "D", Label: "clear entire queue"},
+			{Key: "Shift+↑", Label: "move selected track up in queue"},
+			{Key: "Shift+↓", Label: "move selected track down in queue"},
+			{Key: "s", Label: "shuffle queue"},
+			{Key: "/", Label: "filter tracks in queue"},
+		}
+	}
+	return nil
+}
+
+func (m *Model) helpNavigationBindings() []statusbar.Binding {
+	return []statusbar.Binding{
+		{Key: "0-3", Label: "jump directly to panel (0: Queue, 1: Lib, 2: Playlists, 3: Files)"},
+		{Key: "Tab / Shift+Tab", Label: "cycle panels clockwise / counter-clockwise"},
+		{Key: "↑ / ↓", Label: "navigate items in current panel"},
+	}
+}
+
+func (m *Model) helpSections() []helppopup.Section {
+	sections := make([]helppopup.Section, 0, 3)
+	if local := m.helpLocalBindings(); len(local) > 0 {
+		panelName := "Library"
+		switch m.activePanel {
+		case panels.PanelPlaylists:
+			panelName = "Playlists"
+		case panels.PanelFileBrowser:
+			panelName = "File Browser"
+		case panels.PanelQueue:
+			panelName = "Queue"
+		}
+		sections = append(sections, helppopup.Section{Title: "Local (" + panelName + ")", Bindings: local})
+	}
+	sections = append(sections, helppopup.Section{Title: "Global", Bindings: globalHelpBindings})
+	sections = append(sections, helppopup.Section{Title: "Navigation", Bindings: m.helpNavigationBindings()})
+	return sections
+}
+
+func (m *Model) updateStatusBar() {
+	if m.statusPanel != nil {
+		m.statusPanel.SetKeybindings(m.statusBindings())
+	}
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -316,8 +447,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		// Playback controls
+		// Playback controls / Space: in Queue panel play selected track; globally toggle pause
 		case " ":
+			if m.activePanel == panels.PanelQueue && m.player != nil {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+					if idx, track, found := q.SelectedTrack(); found {
+						// If already on the currently playing track, toggle pause
+						if track.Current || track.Playing {
+							_ = m.player.TogglePause()
+						} else {
+							_ = m.player.PlayIndex(idx)
+						}
+						return m, nil
+					}
+				}
+			}
 			if m.player != nil {
 				_ = m.player.TogglePause()
 			}
@@ -342,12 +486,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.player.VolumeDown()
 			}
 			return m, nil
-		case "alt+right":
+		case "shift+right", "alt+right":
 			if m.player != nil {
 				_ = m.player.SeekRelative(5)
 			}
 			return m, nil
-		case "alt+left":
+		case "shift+left", "alt+left":
 			if m.player != nil {
 				_ = m.player.SeekRelative(-5)
 			}
@@ -357,24 +501,28 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "0":
 			m.activePanel = panels.PanelQueue
 			m.updateFocus()
+			m.updateStatusBar()
 			m.recalculateLayout()
 			return m, nil
 		case "1":
 			m.activePanel = panels.PanelLibrary
 			m.lastLeftFocus = panels.PanelLibrary
 			m.updateFocus()
+			m.updateStatusBar()
 			m.recalculateLayout()
 			return m, nil
 		case "2":
 			m.activePanel = panels.PanelPlaylists
 			m.lastLeftFocus = panels.PanelPlaylists
 			m.updateFocus()
+			m.updateStatusBar()
 			m.recalculateLayout()
 			return m, nil
 		case "3":
 			m.activePanel = panels.PanelFileBrowser
 			m.lastLeftFocus = panels.PanelFileBrowser
 			m.updateFocus()
+			m.updateStatusBar()
 			m.recalculateLayout()
 			return m, nil
 
@@ -394,6 +542,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastLeftFocus = panels.PanelLibrary
 			}
 			m.updateFocus()
+			m.updateStatusBar()
 			m.recalculateLayout()
 			return m, nil
 
@@ -412,6 +561,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastLeftFocus = panels.PanelFileBrowser
 			}
 			m.updateFocus()
+			m.updateStatusBar()
 			m.recalculateLayout()
 			return m, nil
 
@@ -430,6 +580,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down":
 			m.currentPanel().CursorDown()
 			return m, nil
+
+		// Yazi-like navigation for File Browser (left: parent directory, right: enter directory / play file)
+		case "left":
+			if m.activePanel == panels.PanelFileBrowser {
+				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
+					fb.GoParent()
+				}
+			}
+			return m, nil
+
+		case "right":
+			if m.activePanel == panels.PanelFileBrowser {
+				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
+					if !fb.Enter() {
+						if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
+							_ = m.player.LoadFile(item.Path, "replace")
+						}
+					}
+				}
+			}
+			return m, nil
 		}
 	}
 
@@ -441,8 +612,19 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch m.modalMode {
 	case ModalHelp:
-		if key == "esc" || key == "?" || key == "enter" || key == "q" {
+		switch key {
+		case "esc", "?", "enter", "q":
 			m.modalMode = ModalNone
+			m.helpScroll = 0
+		case "up", "k":
+			if m.helpScroll > 0 {
+				m.helpScroll--
+			}
+		case "down", "j":
+			max := helppopup.MaxScroll(m.helpSections(), m.height)
+			if m.helpScroll < max {
+				m.helpScroll++
+			}
 		}
 		return m, nil
 
@@ -602,34 +784,23 @@ func (m *Model) View() string {
 }
 
 func (m *Model) renderModalOverlay(base string) string {
+	if m.modalMode == ModalHelp {
+		helpBox := helppopup.Box(m.helpSections(), m.width, m.height, m.helpScroll)
+		return lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			helpBox,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+		)
+	}
+
 	var modalContent string
 	var title string
 
 	switch m.modalMode {
-	case ModalHelp:
-		title = "Help & Keybindings"
-		modalContent = strings.Join([]string{
-			"0         Jump to Queue (Panel 0)",
-			"1, 2, 3   Jump to Library, Playlists, File Browser",
-			"Tab/S-Tab Cycle through panels",
-			"[ / ]     Switch sub-tabs (Dirs, Artists, Albums, Tracks)",
-			"↑ / ↓     Navigate items",
-			"Space     Play / Pause",
-			"> / <     Next / Previous track",
-			"+ / -     Volume Up / Down",
-			"Alt+←/→   Seek backward / forward 5s",
-			"Enter     Play track / Open directory",
-			"a         Append selected track to queue",
-			"d / D     Remove track / Clear queue",
-			"Shift+↑/↓ Move track up/down in queue",
-			"s         Shuffle queue",
-			"/         Live fuzzy search",
-			"e         Edit metadata tags",
-			"q / Q     Detach / Quit mpv daemon",
-			"",
-			"[Press Esc or ? to close]",
-		}, "\n")
-
 	case ModalSearch:
 		title = "Fuzzy Filter"
 		modalContent = fmt.Sprintf("Type to filter:\n\n  /%s█\n\n[Esc: Clear/Close | Enter: Confirm]", m.searchBuffer)

@@ -156,18 +156,20 @@ func frameBody(top, footer, body string, width, height int, lineStyle lipgloss.S
 func topBorder(title string, width int, focused bool, lineStyle lipgloss.Style) string {
 	const leadDashes = 2
 	label := title
-	if len(label) > width-4 {
-		label = label[:width-4]
+	if len(label) > width-5 {
+		label = label[:width-5]
 	}
 
-	fill := width - leadDashes - len(label)
+	// Add trailing space for visual separation from the border line
+	renderedLabel := label + " "
+	fill := width - leadDashes - len(renderedLabel)
 	if fill < 0 {
 		fill = 0
 	}
 
 	var b strings.Builder
 	b.WriteString(lineStyle.Render("╭" + strings.Repeat("─", leadDashes)))
-	b.WriteString(TitleStyle(focused).Render(label))
+	b.WriteString(TitleStyle(focused).Render(renderedLabel))
 	b.WriteString(lineStyle.Render(strings.Repeat("─", fill) + "╮"))
 	return b.String()
 }

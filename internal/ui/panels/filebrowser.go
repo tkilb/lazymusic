@@ -14,19 +14,22 @@ import (
 
 // FileItem represents a directory or audio file in the file browser.
 type FileItem struct {
-	Name  string
-	Path  string
-	IsDir bool
+	Name    string
+	Path    string // Real physical path (for reading/playback)
+	IsDir   bool
+	IsLink  bool
+	Target  string
 }
 
 // FileBrowserPanel implements Panel for Panel 3 (File Browser).
 type FileBrowserPanel struct {
-	focused    bool
-	width      int
-	height     int
-	cursor     int
-	currentDir string
-	items      []FileItem
+	focused     bool
+	width       int
+	height      int
+	cursor      int
+	currentPath string   // Logical current directory path (preserving symlink structure)
+	history     []string // Breadcrumb stack of previous directories for clean backtracking
+	items       []FileItem
 }
 
 // NewFileBrowserPanel creates a new FileBrowserPanel initialized to the user's music or home directory.
@@ -40,8 +43,8 @@ func NewFileBrowserPanel(initialDir string) *FileBrowserPanel {
 	}
 
 	p := &FileBrowserPanel{
-		cursor:     0,
-		currentDir: initialDir,
+		cursor:      0,
+		currentPath: filepath.Clean(initialDir),
 	}
 	p.ReadDir(initialDir)
 	return p
@@ -89,22 +92,13 @@ func (p *FileBrowserPanel) CursorDown() {
 }
 
 // ReadDir loads directory contents, placing directories first, followed by audio files.
-func (p *FileBrowserPanel) ReadDir(dir string) {
-	p.currentDir = dir
+func (p *FileBrowserPanel) ReadDir(logicalDir string) {
+	logicalDir = filepath.Clean(logicalDir)
+	p.currentPath = logicalDir
 	p.cursor = 0
 	p.items = nil
 
-	// Add parent directory navigation if not at root
-	parent := filepath.Dir(dir)
-	if parent != dir {
-		p.items = append(p.items, FileItem{
-			Name:  "../",
-			Path:  parent,
-			IsDir: true,
-		})
-	}
-
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(logicalDir)
 	if err != nil {
 		return
 	}
@@ -118,28 +112,71 @@ func (p *FileBrowserPanel) ReadDir(dir string) {
 			continue // Skip hidden files
 		}
 
-		fullPath := filepath.Join(dir, name)
-		if entry.IsDir() {
+		logicalItemPath := filepath.Join(logicalDir, name)
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		isDir := entry.IsDir()
+		isLink := (info.Mode() & os.ModeSymlink) != 0
+		targetPath := logicalItemPath
+
+		if isLink {
+			// Resolve symlink target
+			resolved, err := filepath.EvalSymlinks(logicalItemPath)
+			if err == nil {
+				targetPath = resolved
+				stat, err := os.Stat(resolved)
+				if err == nil && stat.IsDir() {
+					isDir = true
+				}
+			}
+		}
+
+		if isDir {
+			displayName := name + "/"
+			if isLink {
+				targetDisplay := targetPath
+				home, _ := os.UserHomeDir()
+				if strings.HasPrefix(targetDisplay, home) {
+					targetDisplay = "~" + strings.TrimPrefix(targetDisplay, home)
+				}
+				displayName = name + "/ -> " + targetDisplay
+			}
 			dirs = append(dirs, FileItem{
-				Name:  name + "/",
-				Path:  fullPath,
-				IsDir: true,
+				Name:   displayName,
+				Path:   logicalItemPath,
+				IsDir:  true,
+				IsLink: isLink,
+				Target: targetPath,
 			})
 		} else {
 			ext := strings.ToLower(filepath.Ext(name))
 			switch ext {
 			case ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".wav":
+				displayName := name
+				if isLink {
+					targetDisplay := targetPath
+					home, _ := os.UserHomeDir()
+					if strings.HasPrefix(targetDisplay, home) {
+						targetDisplay = "~" + strings.TrimPrefix(targetDisplay, home)
+					}
+					displayName = name + " -> " + targetDisplay
+				}
 				files = append(files, FileItem{
-					Name:  name,
-					Path:  fullPath,
-					IsDir: false,
+					Name:   displayName,
+					Path:   logicalItemPath,
+					IsDir:  false,
+					IsLink: isLink,
+					Target: targetPath,
 				})
 			}
 		}
 	}
 
-	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
-	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	sort.Slice(dirs, func(i, j int) bool { return strings.ToLower(dirs[i].Name) < strings.ToLower(dirs[j].Name) })
+	sort.Slice(files, func(i, j int) bool { return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name) })
 
 	p.items = append(p.items, dirs...)
 	p.items = append(p.items, files...)
@@ -153,17 +190,50 @@ func (p *FileBrowserPanel) SelectedItem() (FileItem, bool) {
 	return FileItem{}, false
 }
 
-// Enter navigates into directory or returns false if file.
+// Enter navigates into directory or returns false if file (Yazi 'right' / Enter).
 func (p *FileBrowserPanel) Enter() bool {
 	item, ok := p.SelectedItem()
 	if !ok {
 		return false
 	}
 	if item.IsDir {
+		// Push current path to history stack
+		p.history = append(p.history, p.currentPath)
 		p.ReadDir(item.Path)
 		return true
 	}
 	return false
+}
+
+// GoParent navigates to the previous directory (Yazi 'left' arrow).
+// If a history stack exists, returns to the previous directory where you came from.
+// Otherwise, navigates to the logical parent directory (filepath.Dir).
+func (p *FileBrowserPanel) GoParent() bool {
+	oldPath := p.currentPath
+	var targetDir string
+
+	if len(p.history) > 0 {
+		// Pop the last visited directory from the history stack
+		targetDir = p.history[len(p.history)-1]
+		p.history = p.history[:len(p.history)-1]
+	} else {
+		parent := filepath.Dir(p.currentPath)
+		if parent == p.currentPath {
+			return false // Already at root
+		}
+		targetDir = parent
+	}
+
+	p.ReadDir(targetDir)
+
+	// Restore cursor onto the directory we just navigated out of
+	for i, item := range p.items {
+		if item.Path == oldPath || filepath.Clean(item.Target) == filepath.Clean(oldPath) {
+			p.cursor = i
+			break
+		}
+	}
+	return true
 }
 
 func (p *FileBrowserPanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
@@ -190,10 +260,7 @@ func (p *FileBrowserPanel) View() string {
 	for i := offset; i < len(p.items) && len(lines) < innerHeight; i++ {
 		item := p.items[i]
 		name := item.Name
-		lineStr := fmt.Sprintf(" %-*s", innerWidth-1, name)
-		if len(lineStr) > innerWidth {
-			lineStr = lineStr[:innerWidth]
-		}
+		lineStr := " " + name
 
 		if i == p.cursor && p.focused {
 			lines = append(lines, theme.CursorRowStyle.Render(lineStr))
@@ -214,7 +281,7 @@ func (p *FileBrowserPanel) View() string {
 
 	// Shorten path for display
 	home, _ := os.UserHomeDir()
-	displayDir := p.currentDir
+	displayDir := p.currentPath
 	if strings.HasPrefix(displayDir, home) {
 		displayDir = "~" + strings.TrimPrefix(displayDir, home)
 	}

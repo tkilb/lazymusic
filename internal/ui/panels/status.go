@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/player"
+	"github.com/tylerkilburn/lazymusic/internal/ui/statusbar"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
@@ -24,6 +25,7 @@ type StatusPanel struct {
 	totalTime string
 	percent   float64
 	volume    int
+	bindings  []statusbar.Binding
 }
 
 // NewStatusPanel creates a new StatusPanel instance.
@@ -40,6 +42,10 @@ func NewStatusPanel() *StatusPanel {
 		percent:   0.0,
 		volume:    100,
 	}
+}
+
+func (s *StatusPanel) SetKeybindings(b []statusbar.Binding) {
+	s.bindings = b
 }
 
 func (s *StatusPanel) SetPlaybackState(state player.PlaybackState) {
@@ -136,23 +142,11 @@ func (s *StatusPanel) View() string {
 	}
 	progressLine := fmt.Sprintf("%s%s%s", timePrefix, bar.String(), timeSuffix)
 
-	// Line 3: lazygit-style keybinding bar with blue key highlights and dimmed descriptions
-	controls := fmt.Sprintf(" Vol: %d%%   %s   %s   %s   %s   %s   %s",
-		s.volume,
-		renderKeybind("Space", "pause"),
-		renderKeybind(">", "next"),
-		renderKeybind("<", "prev"),
-		renderKeybind("/", "search"),
-		renderKeybind("?", "help"),
-		renderKeybind("q", "detach"),
-	)
+	// Line 3: lazygit-style context-aware keybindings rendered with statusbar.Render
+	controls := " " + statusbar.Render(s.bindings)
 
 	lines := []string{trackInfo, progressLine, controls}
 	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
 
 	return theme.Frame("Status & Controls", body, innerWidth, innerHeight, false)
-}
-
-func renderKeybind(key, desc string) string {
-	return theme.StatusKeyStyle.Render(key) + " " + theme.StatusDescStyle.Render(desc)
 }
