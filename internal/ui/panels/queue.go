@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
@@ -137,11 +138,6 @@ func (p *QueuePanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
 }
 
 func (p *QueuePanel) View() string {
-	style := theme.BasePanelStyle
-	if p.focused {
-		style = theme.FocusedPanelStyle
-	}
-
 	innerWidth := p.width - 2
 	innerHeight := p.height - 2
 	if innerWidth < 0 {
@@ -151,34 +147,21 @@ func (p *QueuePanel) View() string {
 		innerHeight = 0
 	}
 
-	header := fmt.Sprintf("%s (%d tracks)", theme.PanelTitleStyle.Render("0: Queue"), len(p.playlist))
-	if p.filterQuery != "" {
-		header += fmt.Sprintf(" %s", theme.KeybindDescStyle.Render("/"+p.filterQuery))
-	}
-
 	var lines []string
-	lines = append(lines, header)
-
 	filtered := p.filteredPlaylist()
 
-	visibleSlots := innerHeight - 1
-	if visibleSlots < 0 {
-		visibleSlots = 0
+	offset := 0
+	if p.cursor >= innerHeight {
+		offset = p.cursor - innerHeight + 1
 	}
 
 	if len(filtered) == 0 {
 		if p.filterQuery != "" {
-			lines = append(lines, theme.KeybindDescStyle.Render("  [No matching tracks found]"))
+			lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [No matching tracks found]"))
 		} else {
-			lines = append(lines, theme.KeybindDescStyle.Render("  [Queue is empty - press 'a' or Enter on tracks to add]"))
+			lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [Queue is empty - press 'a' or Enter on tracks to add]"))
 		}
 	} else {
-		// Scrolling calculation
-		offset := 0
-		if p.cursor >= visibleSlots {
-			offset = p.cursor - visibleSlots + 1
-		}
-
 		for i := offset; i < len(filtered) && len(lines) < innerHeight; i++ {
 			item := filtered[i]
 			title := item.Title
@@ -186,27 +169,40 @@ func (p *QueuePanel) View() string {
 				title = filepath.Base(item.Filename)
 			}
 
-			playingIndicator := " "
+			playingIndicator := "  "
 			if item.Current || item.Playing {
-				playingIndicator = "▶"
+				playingIndicator = "▶ "
 			}
 
 			prefix := fmt.Sprintf("%s%2d. ", playingIndicator, i+1)
+			lineStr := fmt.Sprintf(" %s%-*s", prefix, innerWidth-len(prefix)-1, title)
+			if len(lineStr) > innerWidth {
+				lineStr = lineStr[:innerWidth]
+			}
 
 			if i == p.cursor && p.focused {
-				lines = append(lines, theme.CursorItemStyle.Render(fmt.Sprintf(" > %s%s", prefix, title)))
+				lines = append(lines, theme.CursorRowStyle.Render(lineStr))
 			} else if i == p.cursor && !p.focused {
-				lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf(" > %s%s", prefix, title)))
+				lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
 			} else {
-				lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf("   %s%s", prefix, title)))
+				lines = append(lines, lineStr)
 			}
 		}
 	}
 
 	for len(lines) < innerHeight {
-		lines = append(lines, "")
+		lines = append(lines, strings.Repeat(" ", innerWidth))
 	}
 
-	content := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
-	return style.Width(innerWidth).Height(innerHeight).Render(content)
+	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
+
+	var footer string
+	if len(p.playlist) > 0 {
+		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(p.playlist))
+	}
+	if p.filterQuery != "" {
+		footer = "/" + p.filterQuery + " " + footer
+	}
+
+	return theme.Frame("[0] Queue", body, innerWidth, innerHeight, p.focused, footer)
 }

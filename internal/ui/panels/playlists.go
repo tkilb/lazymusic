@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
@@ -150,11 +151,6 @@ func (p *PlaylistsPanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
 }
 
 func (p *PlaylistsPanel) View() string {
-	style := theme.BasePanelStyle
-	if p.focused {
-		style = theme.FocusedPanelStyle
-	}
-
 	innerWidth := p.width - 2
 	innerHeight := p.height - 2
 	if innerWidth < 0 {
@@ -164,35 +160,43 @@ func (p *PlaylistsPanel) View() string {
 		innerHeight = 0
 	}
 
-	header := fmt.Sprintf("%s (%d)", theme.PanelTitleStyle.Render("2: Playlists"), len(p.items))
 	var lines []string
-	lines = append(lines, header)
 
-	visibleSlots := innerHeight - 1
-	if visibleSlots < 0 {
-		visibleSlots = 0
+	offset := 0
+	if p.cursor >= innerHeight {
+		offset = p.cursor - innerHeight + 1
 	}
 
 	if len(p.items) == 0 {
-		lines = append(lines, theme.KeybindDescStyle.Render("  [No playlists in ~/.config/lazymusic/playlists]"))
+		lines = append(lines, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" [No playlists in ~/.config/lazymusic/playlists]"))
 	} else {
-		for i := 0; i < len(p.items) && i < visibleSlots; i++ {
+		for i := offset; i < len(p.items) && len(lines) < innerHeight; i++ {
 			item := p.items[i]
-			displayName := fmt.Sprintf("▶ %s", item.Name)
+			lineStr := fmt.Sprintf(" %-*s", innerWidth-1, item.Name)
+			if len(lineStr) > innerWidth {
+				lineStr = lineStr[:innerWidth]
+			}
+
 			if i == p.cursor && p.focused {
-				lines = append(lines, theme.CursorItemStyle.Render(fmt.Sprintf(" > %s", displayName)))
+				lines = append(lines, theme.CursorRowStyle.Render(lineStr))
 			} else if i == p.cursor && !p.focused {
-				lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf(" > %s", displayName)))
+				lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
 			} else {
-				lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf("   %s", displayName)))
+				lines = append(lines, lineStr)
 			}
 		}
 	}
 
 	for len(lines) < innerHeight {
-		lines = append(lines, "")
+		lines = append(lines, strings.Repeat(" ", innerWidth))
 	}
 
-	content := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
-	return style.Width(innerWidth).Height(innerHeight).Render(content)
+	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
+
+	var footer string
+	if len(p.items) > 0 {
+		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(p.items))
+	}
+
+	return theme.Frame("[2] Playlists", body, innerWidth, innerHeight, p.focused, footer)
 }

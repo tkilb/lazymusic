@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/library"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
@@ -157,11 +158,6 @@ func (p *LibraryPanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
 }
 
 func (p *LibraryPanel) View() string {
-	style := theme.BasePanelStyle
-	if p.focused {
-		style = theme.FocusedPanelStyle
-	}
-
 	innerWidth := p.width - 2
 	innerHeight := p.height - 2
 	if innerWidth < 0 {
@@ -171,51 +167,51 @@ func (p *LibraryPanel) View() string {
 		innerHeight = 0
 	}
 
-	// Render tabs
-	var tabStrings []string
+	var tabs []theme.Tab
 	for i, tab := range p.tabs {
-		if i == p.curTab {
-			tabStrings = append(tabStrings, theme.TabActiveStyle.Render(fmt.Sprintf("[%s]", tab)))
-		} else {
-			tabStrings = append(tabStrings, theme.TabInactiveStyle.Render(tab))
-		}
+		tabs = append(tabs, theme.Tab{
+			Label:  tab,
+			Active: i == p.curTab,
+		})
 	}
-	header := fmt.Sprintf("%s %s", theme.PanelTitleStyle.Render("1: Library"), strings.Join(tabStrings, " "))
-	if p.filterQuery != "" {
-		header += fmt.Sprintf(" %s", theme.KeybindDescStyle.Render("/"+p.filterQuery))
-	}
-
-	var lines []string
-	lines = append(lines, header)
 
 	currentItems := p.filteredItems()
-	visibleSlots := innerHeight - 1
-	if visibleSlots < 0 {
-		visibleSlots = 0
-	}
+	var lines []string
 
-	// Handle scroll offset
 	offset := 0
-	if p.cursor >= visibleSlots {
-		offset = p.cursor - visibleSlots + 1
+	if p.cursor >= innerHeight {
+		offset = p.cursor - innerHeight + 1
 	}
 
 	for i := offset; i < len(currentItems) && len(lines) < innerHeight; i++ {
 		item := currentItems[i]
+		lineStr := fmt.Sprintf(" %-*s", innerWidth-1, item)
+		if len(lineStr) > innerWidth {
+			lineStr = lineStr[:innerWidth]
+		}
+
 		if i == p.cursor && p.focused {
-			lines = append(lines, theme.CursorItemStyle.Render(fmt.Sprintf(" > %s", item)))
+			lines = append(lines, theme.CursorRowStyle.Render(lineStr))
 		} else if i == p.cursor && !p.focused {
-			lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf(" > %s", item)))
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
 		} else {
-			lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf("   %s", item)))
+			lines = append(lines, lineStr)
 		}
 	}
 
-	// Pad lines to innerHeight
 	for len(lines) < innerHeight {
-		lines = append(lines, "")
+		lines = append(lines, strings.Repeat(" ", innerWidth))
 	}
 
-	content := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
-	return style.Width(innerWidth).Height(innerHeight).Render(content)
+	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
+
+	var footer string
+	if len(currentItems) > 0 {
+		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(currentItems))
+	}
+	if p.filterQuery != "" {
+		footer = "/" + p.filterQuery + " " + footer
+	}
+
+	return theme.FrameTabs("[1]", tabs, body, innerWidth, innerHeight, p.focused, footer)
 }

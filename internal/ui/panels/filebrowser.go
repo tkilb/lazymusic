@@ -171,11 +171,6 @@ func (p *FileBrowserPanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
 }
 
 func (p *FileBrowserPanel) View() string {
-	style := theme.BasePanelStyle
-	if p.focused {
-		style = theme.FocusedPanelStyle
-	}
-
 	innerWidth := p.width - 2
 	innerHeight := p.height - 2
 	if innerWidth < 0 {
@@ -185,6 +180,38 @@ func (p *FileBrowserPanel) View() string {
 		innerHeight = 0
 	}
 
+	var lines []string
+
+	offset := 0
+	if p.cursor >= innerHeight {
+		offset = p.cursor - innerHeight + 1
+	}
+
+	for i := offset; i < len(p.items) && len(lines) < innerHeight; i++ {
+		item := p.items[i]
+		name := item.Name
+		lineStr := fmt.Sprintf(" %-*s", innerWidth-1, name)
+		if len(lineStr) > innerWidth {
+			lineStr = lineStr[:innerWidth]
+		}
+
+		if i == p.cursor && p.focused {
+			lines = append(lines, theme.CursorRowStyle.Render(lineStr))
+		} else if i == p.cursor && !p.focused {
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
+		} else if item.IsDir {
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Render(lineStr))
+		} else {
+			lines = append(lines, lineStr)
+		}
+	}
+
+	for len(lines) < innerHeight {
+		lines = append(lines, strings.Repeat(" ", innerWidth))
+	}
+
+	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
+
 	// Shorten path for display
 	home, _ := os.UserHomeDir()
 	displayDir := p.currentDir
@@ -192,41 +219,10 @@ func (p *FileBrowserPanel) View() string {
 		displayDir = "~" + strings.TrimPrefix(displayDir, home)
 	}
 
-	header := fmt.Sprintf("%s %s", theme.PanelTitleStyle.Render("3: File Browser"), theme.KeybindDescStyle.Render(displayDir))
-	var lines []string
-	lines = append(lines, header)
-
-	visibleSlots := innerHeight - 1
-	if visibleSlots < 0 {
-		visibleSlots = 0
+	var footer string
+	if len(p.items) > 0 {
+		footer = fmt.Sprintf("%d/%d", p.cursor+1, len(p.items))
 	}
 
-	// Handle scrolling offset
-	offset := 0
-	if p.cursor >= visibleSlots {
-		offset = p.cursor - visibleSlots + 1
-	}
-
-	for i := offset; i < len(p.items) && len(lines) < innerHeight; i++ {
-		item := p.items[i]
-		name := item.Name
-		if item.IsDir {
-			name = lipgloss.NewStyle().Foreground(theme.PrimaryColor).Render(name)
-		}
-
-		if i == p.cursor && p.focused {
-			lines = append(lines, theme.CursorItemStyle.Render(fmt.Sprintf(" > %s", name)))
-		} else if i == p.cursor && !p.focused {
-			lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf(" > %s", name)))
-		} else {
-			lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf("   %s", name)))
-		}
-	}
-
-	for len(lines) < innerHeight {
-		lines = append(lines, "")
-	}
-
-	content := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
-	return style.Width(innerWidth).Height(innerHeight).Render(content)
+	return theme.Frame("[3] Files: "+displayDir, body, innerWidth, innerHeight, p.focused, footer)
 }

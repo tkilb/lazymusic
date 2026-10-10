@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
@@ -101,19 +102,18 @@ func (s *StatusPanel) View() string {
 	}
 
 	// Line 1: [State] Title • Artist • Album (Year)
-	trackInfo := fmt.Sprintf("[%s] %s • %s • %s (%s)",
-		theme.StatusLabelStyle.Render(stateIcon),
-		theme.CursorItemStyle.Render(s.title),
+	trackInfo := fmt.Sprintf(" [%s] %s • %s • %s (%s)",
+		lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteGreen).Render(stateIcon),
+		lipgloss.NewStyle().Bold(true).Render(s.title),
 		s.artist,
 		s.album,
 		s.year,
 	)
 
 	// Line 2: Progress bar + format
-	// 03:12 ━━━━━●━━━━━ 06:23   FLAC 24-bit 96kHz
-	timePrefix := fmt.Sprintf("%s ", s.currTime)
-	timeSuffix := fmt.Sprintf(" %s   %s", s.totalTime, theme.KeybindDescStyle.Render(s.format))
-	barWidth := innerWidth - len(timePrefix) - len(timeSuffix)
+	timePrefix := fmt.Sprintf(" %s ", s.currTime)
+	timeSuffix := fmt.Sprintf(" %s   %s", s.totalTime, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(s.format))
+	barWidth := innerWidth - len(timePrefix) - len(timeSuffix) - 1
 	if barWidth < 10 {
 		barWidth = 10
 	}
@@ -136,22 +136,23 @@ func (s *StatusPanel) View() string {
 	}
 	progressLine := fmt.Sprintf("%s%s%s", timePrefix, bar.String(), timeSuffix)
 
-	// Line 3: Controls and keybind cheatsheet
-	controls := fmt.Sprintf("Vol: %d%%  [Repeat: Off] [Shuffle: Off]  %s %s %s %s %s",
+	// Line 3: lazygit-style keybinding bar with blue key highlights and dimmed descriptions
+	controls := fmt.Sprintf(" Vol: %d%%   %s   %s   %s   %s   %s   %s",
 		s.volume,
-		renderKeybind("Space", "Pause"),
-		renderKeybind(">", "Next"),
-		renderKeybind("<", "Prev"),
-		renderKeybind("?", "Help"),
-		renderKeybind("q", "Detach"),
+		renderKeybind("Space", "pause"),
+		renderKeybind(">", "next"),
+		renderKeybind("<", "prev"),
+		renderKeybind("/", "search"),
+		renderKeybind("?", "help"),
+		renderKeybind("q", "detach"),
 	)
 
 	lines := []string{trackInfo, progressLine, controls}
-	content := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
+	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
 
-	return theme.StatusBarStyle.Width(innerWidth).Height(innerHeight).Render(content)
+	return theme.Frame("Status & Controls", body, innerWidth, innerHeight, false)
 }
 
 func renderKeybind(key, desc string) string {
-	return fmt.Sprintf("[%s: %s]", theme.KeybindKeyStyle.Render(key), theme.KeybindDescStyle.Render(desc))
+	return theme.StatusKeyStyle.Render(key) + " " + theme.StatusDescStyle.Render(desc)
 }

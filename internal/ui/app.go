@@ -213,13 +213,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "t":
-			// Cycle color theme
-			themeName := theme.CycleTheme()
-			_ = themeName
-			m.recalculateLayout()
-			return m, nil
-
 		// Enter: Play track immediately, open folder, or load playlist
 		case "enter":
 			if m.activePanel == panels.PanelLibrary {
@@ -632,7 +625,6 @@ func (m *Model) renderModalOverlay(base string) string {
 			"s         Shuffle queue",
 			"/         Live fuzzy search",
 			"e         Edit metadata tags",
-			"t         Cycle color theme",
 			"q / Q     Detach / Quit mpv daemon",
 			"",
 			"[Press Esc or ? to close]",
@@ -655,7 +647,7 @@ func (m *Model) renderModalOverlay(base string) string {
 		}
 
 		modalContent = strings.Join([]string{
-			fmt.Sprintf("File: %s", theme.KeybindDescStyle.Render(m.tagTrackPath)),
+			fmt.Sprintf("File: %s", lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(m.tagTrackPath)),
 			"",
 			fmt.Sprintf("%sTitle:  %s", cursor0, m.tagTitle),
 			fmt.Sprintf("%sArtist: %s", cursor1, m.tagArtist),
@@ -666,7 +658,7 @@ func (m *Model) renderModalOverlay(base string) string {
 	}
 
 	box := theme.ModalBoxStyle.Width(min(60, m.width-4)).Render(
-		fmt.Sprintf("%s\n\n%s", theme.PanelTitleStyle.Render(title), modalContent),
+		fmt.Sprintf("%s\n\n%s", lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteGreen).Render(title), modalContent),
 	)
 
 	return lipgloss.Place(
