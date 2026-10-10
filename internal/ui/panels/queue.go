@@ -2,37 +2,31 @@ package panels
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
 // QueuePanel implements Panel for Panel 0 (Queue).
 type QueuePanel struct {
-	focused bool
-	width   int
-	height  int
-	cursor  int
-	items   []string
+	focused     bool
+	width       int
+	height      int
+	cursor      int
+	playlist    []player.PlaylistItem
+	currentPos  int
+	filterQuery string
 }
 
 // NewQueuePanel creates a new QueuePanel instance.
 func NewQueuePanel() *QueuePanel {
 	return &QueuePanel{
-		cursor: 1,
-		items: []string{
-			"Airbag - Radiohead",
-			"Paranoid Android - Radiohead",
-			"Subterranean Homesick Alien - Radiohead",
-			"Exit Music (For a Film) - Radiohead",
-			"Let Down - Radiohead",
-			"Karma Police - Radiohead",
-			"Time - Pink Floyd",
-			"Money - Pink Floyd",
-			"Us and Them - Pink Floyd",
-			"Brain Damage - Pink Floyd",
-		},
+		cursor:     0,
+		playlist:   nil,
+		currentPos: -1,
 	}
 }
 
@@ -65,6 +59,24 @@ func (p *QueuePanel) NextTab() {}
 
 func (p *QueuePanel) PrevTab() {}
 
+func (p *QueuePanel) filteredPlaylist() []player.PlaylistItem {
+	if p.filterQuery == "" {
+		return p.playlist
+	}
+	query := strings.ToLower(p.filterQuery)
+	var filtered []player.PlaylistItem
+	for _, it := range p.playlist {
+		title := it.Title
+		if title == "" {
+			title = filepath.Base(it.Filename)
+		}
+		if strings.Contains(strings.ToLower(title), query) {
+			filtered = append(filtered, it)
+		}
+	}
+	return filtered
+}
+
 func (p *QueuePanel) CursorUp() {
 	if p.cursor > 0 {
 		p.cursor--
@@ -72,9 +84,52 @@ func (p *QueuePanel) CursorUp() {
 }
 
 func (p *QueuePanel) CursorDown() {
-	if p.cursor < len(p.items)-1 {
+	list := p.filteredPlaylist()
+	if p.cursor < len(list)-1 {
 		p.cursor++
 	}
+}
+
+// Cursor returns current cursor position.
+func (p *QueuePanel) Cursor() int {
+	return p.cursor
+}
+
+// SetFilterQuery sets the search filter query for Queue.
+func (p *QueuePanel) SetFilterQuery(query string) {
+	p.filterQuery = query
+	p.cursor = 0
+}
+
+// FilterQuery returns the search filter query for Queue.
+func (p *QueuePanel) FilterQuery() string {
+	return p.filterQuery
+}
+
+// SetPlaylist updates the queue with mpv's active playlist.
+func (p *QueuePanel) SetPlaylist(items []player.PlaylistItem, currentPos int) {
+	p.playlist = items
+	p.currentPos = currentPos
+	if p.cursor >= len(p.playlist) {
+		p.cursor = len(p.playlist) - 1
+	}
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
+}
+
+// SelectedTrack returns the selected item index and track.
+func (p *QueuePanel) SelectedTrack() (int, player.PlaylistItem, bool) {
+	filtered := p.filteredPlaylist()
+	if p.cursor >= 0 && p.cursor < len(filtered) {
+		selectedItem := filtered[p.cursor]
+		for originalIdx, item := range p.playlist {
+			if item.ID == selectedItem.ID {
+				return originalIdx, item, true
+			}
+		}
+	}
+	return -1, player.PlaylistItem{}, false
 }
 
 func (p *QueuePanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
@@ -96,24 +151,55 @@ func (p *QueuePanel) View() string {
 		innerHeight = 0
 	}
 
-	header := fmt.Sprintf("%s (%d tracks)", theme.PanelTitleStyle.Render("0: Queue"), len(p.items))
+	header := fmt.Sprintf("%s (%d tracks)", theme.PanelTitleStyle.Render("0: Queue"), len(p.playlist))
+	if p.filterQuery != "" {
+		header += fmt.Sprintf(" %s", theme.KeybindDescStyle.Render("/"+p.filterQuery))
+	}
+
 	var lines []string
 	lines = append(lines, header)
+
+	filtered := p.filteredPlaylist()
 
 	visibleSlots := innerHeight - 1
 	if visibleSlots < 0 {
 		visibleSlots = 0
 	}
 
-	for i := 0; i < len(p.items) && i < visibleSlots; i++ {
-		item := p.items[i]
-		prefix := fmt.Sprintf("%2d. ", i+1)
-		if i == p.cursor && p.focused {
-			lines = append(lines, theme.CursorItemStyle.Render(fmt.Sprintf(" > %s%s", prefix, item)))
-		} else if i == p.cursor && !p.focused {
-			lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf(" > %s%s", prefix, item)))
+	if len(filtered) == 0 {
+		if p.filterQuery != "" {
+			lines = append(lines, theme.KeybindDescStyle.Render("  [No matching tracks found]"))
 		} else {
-			lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf("   %s%s", prefix, item)))
+			lines = append(lines, theme.KeybindDescStyle.Render("  [Queue is empty - press 'a' or Enter on tracks to add]"))
+		}
+	} else {
+		// Scrolling calculation
+		offset := 0
+		if p.cursor >= visibleSlots {
+			offset = p.cursor - visibleSlots + 1
+		}
+
+		for i := offset; i < len(filtered) && len(lines) < innerHeight; i++ {
+			item := filtered[i]
+			title := item.Title
+			if title == "" {
+				title = filepath.Base(item.Filename)
+			}
+
+			playingIndicator := " "
+			if item.Current || item.Playing {
+				playingIndicator = "▶"
+			}
+
+			prefix := fmt.Sprintf("%s%2d. ", playingIndicator, i+1)
+
+			if i == p.cursor && p.focused {
+				lines = append(lines, theme.CursorItemStyle.Render(fmt.Sprintf(" > %s%s", prefix, title)))
+			} else if i == p.cursor && !p.focused {
+				lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf(" > %s%s", prefix, title)))
+			} else {
+				lines = append(lines, theme.NormalItemStyle.Render(fmt.Sprintf("   %s%s", prefix, title)))
+			}
 		}
 	}
 

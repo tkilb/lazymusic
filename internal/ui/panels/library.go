@@ -11,15 +11,17 @@ import (
 
 // LibraryPanel implements Panel for Panel 1 (Library).
 type LibraryPanel struct {
-	focused bool
-	width   int
-	height  int
-	tabs    []string
-	curTab  int
-	cursor  int
-	storage *library.Storage
-	items   map[int][]string
-	tracks  []library.Track
+	focused      bool
+	width        int
+	height       int
+	tabs         []string
+	curTab       int
+	cursor       int
+	storage      *library.Storage
+	items        map[int][]string
+	tracks       []library.Track
+	filterQuery  string
+	filterActive bool
 }
 
 // NewLibraryPanel creates a new LibraryPanel instance connected to SQLite storage.
@@ -86,11 +88,30 @@ func (p *LibraryPanel) IsFocused() bool {
 func (p *LibraryPanel) NextTab() {
 	p.curTab = (p.curTab + 1) % len(p.tabs)
 	p.cursor = 0
+	p.filterQuery = ""
+	p.filterActive = false
 }
 
 func (p *LibraryPanel) PrevTab() {
 	p.curTab = (p.curTab - 1 + len(p.tabs)) % len(p.tabs)
 	p.cursor = 0
+	p.filterQuery = ""
+	p.filterActive = false
+}
+
+func (p *LibraryPanel) filteredItems() []string {
+	all := p.items[p.curTab]
+	if p.filterQuery == "" {
+		return all
+	}
+	query := strings.ToLower(p.filterQuery)
+	var filtered []string
+	for _, item := range all {
+		if strings.Contains(strings.ToLower(item), query) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func (p *LibraryPanel) CursorUp() {
@@ -100,16 +121,33 @@ func (p *LibraryPanel) CursorUp() {
 }
 
 func (p *LibraryPanel) CursorDown() {
-	list := p.items[p.curTab]
+	list := p.filteredItems()
 	if p.cursor < len(list)-1 {
 		p.cursor++
 	}
 }
 
+// SetFilterQuery sets the fuzzy filter string.
+func (p *LibraryPanel) SetFilterQuery(query string) {
+	p.filterQuery = query
+	p.cursor = 0
+}
+
+// FilterQuery returns the current filter query.
+func (p *LibraryPanel) FilterQuery() string {
+	return p.filterQuery
+}
+
 // SelectedTrack returns the currently highlighted track, if in the Tracks tab.
 func (p *LibraryPanel) SelectedTrack() (library.Track, bool) {
-	if p.curTab == 3 && p.cursor >= 0 && p.cursor < len(p.tracks) {
-		return p.tracks[p.cursor], true
+	filtered := p.filteredItems()
+	if p.curTab == 3 && p.cursor >= 0 && p.cursor < len(filtered) {
+		selectedTitle := filtered[p.cursor]
+		for _, t := range p.tracks {
+			if fmt.Sprintf("%s - %s", t.Artist, t.Title) == selectedTitle {
+				return t, true
+			}
+		}
 	}
 	return library.Track{}, false
 }
@@ -119,7 +157,6 @@ func (p *LibraryPanel) Update(msg tea.Msg) (Panel, tea.Cmd) {
 }
 
 func (p *LibraryPanel) View() string {
-	// Frame styling
 	style := theme.BasePanelStyle
 	if p.focused {
 		style = theme.FocusedPanelStyle
@@ -144,17 +181,26 @@ func (p *LibraryPanel) View() string {
 		}
 	}
 	header := fmt.Sprintf("%s %s", theme.PanelTitleStyle.Render("1: Library"), strings.Join(tabStrings, " "))
+	if p.filterQuery != "" {
+		header += fmt.Sprintf(" %s", theme.KeybindDescStyle.Render("/"+p.filterQuery))
+	}
 
 	var lines []string
 	lines = append(lines, header)
 
-	currentItems := p.items[p.curTab]
+	currentItems := p.filteredItems()
 	visibleSlots := innerHeight - 1
 	if visibleSlots < 0 {
 		visibleSlots = 0
 	}
 
-	for i := 0; i < len(currentItems) && i < visibleSlots; i++ {
+	// Handle scroll offset
+	offset := 0
+	if p.cursor >= visibleSlots {
+		offset = p.cursor - visibleSlots + 1
+	}
+
+	for i := offset; i < len(currentItems) && len(lines) < innerHeight; i++ {
 		item := currentItems[i]
 		if i == p.cursor && p.focused {
 			lines = append(lines, theme.CursorItemStyle.Render(fmt.Sprintf(" > %s", item)))
@@ -172,11 +218,4 @@ func (p *LibraryPanel) View() string {
 
 	content := strings.Join(lines[:min(len(lines), innerHeight)], "\n")
 	return style.Width(innerWidth).Height(innerHeight).Render(content)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

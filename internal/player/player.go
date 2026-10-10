@@ -13,20 +13,31 @@ import (
 	"time"
 )
 
+// PlaylistItem represents a track entry in mpv's playlist.
+type PlaylistItem struct {
+	ID       int    `json:"id"`
+	Filename string `json:"filename"`
+	Title    string `json:"title"`
+	Current  bool   `json:"current"`
+	Playing  bool   `json:"playing"`
+}
+
 // PlaybackState represents current playback telemetry from mpv.
 type PlaybackState struct {
-	IsPlaying   bool
-	Pause       bool
-	MediaTitle  string
-	Artist      string
-	Album       string
-	TimePos     float64
-	Duration    float64
-	Volume      float64
-	AudioCodec  string
+	IsPlaying    bool
+	Pause        bool
+	MediaTitle   string
+	Artist       string
+	Album        string
+	TimePos      float64
+	Duration     float64
+	Volume       float64
+	AudioCodec   string
 	AudioBitrate float64
-	Samplerate  int
-	IdleActive  bool
+	Samplerate   int
+	IdleActive   bool
+	Playlist     []PlaylistItem
+	PlaylistPos  int
 }
 
 // Client manages the IPC connection to the mpv background daemon.
@@ -256,6 +267,38 @@ func (c *Client) handlePropertyChange(name string, val interface{}) {
 			c.state.AudioCodec = s
 			changed = true
 		}
+	case "playlist-pos":
+		if f, ok := val.(float64); ok {
+			c.state.PlaylistPos = int(f)
+			changed = true
+		}
+	case "playlist":
+		if list, ok := val.([]interface{}); ok {
+			var items []PlaylistItem
+			for _, elem := range list {
+				if itemMap, ok := elem.(map[string]interface{}); ok {
+					var it PlaylistItem
+					if id, ok := itemMap["id"].(float64); ok {
+						it.ID = int(id)
+					}
+					if fn, ok := itemMap["filename"].(string); ok {
+						it.Filename = fn
+					}
+					if title, ok := itemMap["title"].(string); ok {
+						it.Title = title
+					}
+					if cur, ok := itemMap["current"].(bool); ok {
+						it.Current = cur
+					}
+					if pl, ok := itemMap["playing"].(bool); ok {
+						it.Playing = pl
+					}
+					items = append(items, it)
+				}
+			}
+			c.state.Playlist = items
+			changed = true
+		}
 	}
 
 	snapshot := c.state
@@ -279,6 +322,8 @@ func (c *Client) observeProperties() {
 		"media-title",
 		"metadata",
 		"audio-codec-name",
+		"playlist",
+		"playlist-pos",
 	}
 	for i, prop := range props {
 		_, _ = c.sendCommand("observe_property", i+1, prop)
@@ -287,7 +332,18 @@ func (c *Client) observeProperties() {
 
 func (c *Client) syncInitialState() {
 	go func() {
-		props := []string{"pause", "idle-active", "time-pos", "duration", "volume", "media-title", "metadata", "audio-codec-name"}
+		props := []string{
+			"pause",
+			"idle-active",
+			"time-pos",
+			"duration",
+			"volume",
+			"media-title",
+			"metadata",
+			"audio-codec-name",
+			"playlist",
+			"playlist-pos",
+		}
 		for _, prop := range props {
 			resp, err := c.sendCommand("get_property", prop)
 			if err == nil && resp.Error == "success" {
@@ -336,6 +392,36 @@ func (c *Client) VolumeDown() error {
 // LoadFile loads an audio file (mode: "replace" or "append").
 func (c *Client) LoadFile(path, mode string) error {
 	_, err := c.sendCommand("loadfile", path, mode)
+	return err
+}
+
+// PlayIndex switches playback to a specific index in mpv's playlist.
+func (c *Client) PlayIndex(index int) error {
+	_, err := c.sendCommand("set_property", "playlist-pos", index)
+	return err
+}
+
+// RemoveFromPlaylist removes the track at index from mpv's playlist.
+func (c *Client) RemoveFromPlaylist(index int) error {
+	_, err := c.sendCommand("playlist-remove", index)
+	return err
+}
+
+// MoveInPlaylist moves the track at oldIndex to newIndex in mpv's playlist.
+func (c *Client) MoveInPlaylist(oldIndex, newIndex int) error {
+	_, err := c.sendCommand("playlist-move", oldIndex, newIndex)
+	return err
+}
+
+// ClearPlaylist clears all tracks from mpv's playlist.
+func (c *Client) ClearPlaylist() error {
+	_, err := c.sendCommand("playlist-clear")
+	return err
+}
+
+// ShufflePlaylist shuffles mpv's playlist.
+func (c *Client) ShufflePlaylist() error {
+	_, err := c.sendCommand("playlist-shuffle")
 	return err
 }
 

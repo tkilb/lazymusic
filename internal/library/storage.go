@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	id3v2 "github.com/bogem/id3v2/v2"
 	"github.com/dhowden/tag"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -108,6 +109,35 @@ func (s *Storage) UpsertTrack(t *Track) error {
 		mod_time=excluded.mod_time;
 	`
 	_, err := s.db.Exec(query, t.Path, t.Title, t.Artist, t.Album, t.Genre, t.Year, t.TrackNum, t.Duration, t.Format, t.ModTime)
+	return err
+}
+
+// UpdateTrackMetadata writes ID3v2 tags directly into the audio file (if MP3) and updates SQLite.
+func (s *Storage) UpdateTrackMetadata(path, title, artist, album string) error {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".mp3" {
+		tagFile, err := id3v2.Open(path, id3v2.Options{Parse: true})
+		if err == nil {
+			tagFile.SetTitle(title)
+			tagFile.SetArtist(artist)
+			tagFile.SetAlbum(album)
+			_ = tagFile.Save()
+			_ = tagFile.Close()
+		}
+	}
+
+	info, _ := os.Stat(path)
+	var modTime int64
+	if info != nil {
+		modTime = info.ModTime().Unix()
+	} else {
+		modTime = time.Now().Unix()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	query := `UPDATE tracks SET title = ?, artist = ?, album = ?, mod_time = ? WHERE path = ?`
+	_, err := s.db.Exec(query, title, artist, album, modTime, path)
 	return err
 }
 

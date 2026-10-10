@@ -1,12 +1,25 @@
 package ui
 
 import (
+	"fmt"
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/config"
 	"github.com/tylerkilburn/lazymusic/internal/library"
 	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/panels"
+	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
+)
+
+type ModalMode int
+
+const (
+	ModalNone ModalMode = iota
+	ModalHelp
+	ModalSearch
+	ModalTagEdit
 )
 
 // Model represents the main Bubble Tea model for lazymusic.
@@ -21,6 +34,15 @@ type Model struct {
 	queuePanel    panels.Panel
 	statusPanel   *panels.StatusPanel
 	lastLeftFocus panels.PanelID
+
+	// Modal states
+	modalMode    ModalMode
+	searchBuffer string
+	tagTrackPath string
+	tagTitle     string
+	tagArtist    string
+	tagAlbum     string
+	tagFieldIdx  int // 0: Title, 1: Artist, 2: Album
 }
 
 // PlaybackMsg wraps player state updates for Bubble Tea.
@@ -42,11 +64,12 @@ func NewModel(cfg *config.Config, pClient *player.Client, storage *library.Stora
 		lastLeftFocus: panels.PanelLibrary,
 		leftPanels: []panels.Panel{
 			panels.NewLibraryPanel(storage),
-			panels.NewPlaylistsPanel(),
+			panels.NewPlaylistsPanel(cfg.PlaylistsDir),
 			panels.NewFileBrowserPanel(""),
 		},
 		queuePanel:  panels.NewQueuePanel(),
 		statusPanel: panels.NewStatusPanel(),
+		modalMode:   ModalNone,
 	}
 	m.updateFocus()
 	return m
@@ -116,14 +139,17 @@ func (m *Model) currentPanel() panels.Panel {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case LibraryScanMsg:
-		// Refresh library panel with freshly scanned data
 		if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
 			lib.Refresh()
 		}
 		return m, nil
 
 	case PlaybackMsg:
-		m.statusPanel.SetPlaybackState(player.PlaybackState(msg))
+		state := player.PlaybackState(msg)
+		m.statusPanel.SetPlaybackState(state)
+		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+			q.SetPlaylist(state.Playlist, state.PlaylistPos)
+		}
 		return m, m.listenPlayerEvents()
 
 	case tea.WindowSizeMsg:
@@ -133,6 +159,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// Handle modals first
+		if m.modalMode != ModalNone {
+			return m.handleModalKey(msg)
+		}
+
 		switch msg.String() {
 		case "ctrl+c":
 			if m.player != nil {
@@ -154,7 +185,42 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 
-		// Enter: Play track immediately or open folder
+		// Modals
+		case "?":
+			m.modalMode = ModalHelp
+			return m, nil
+
+		case "/":
+			if m.activePanel == panels.PanelLibrary || m.activePanel == panels.PanelQueue {
+				m.modalMode = ModalSearch
+				m.searchBuffer = ""
+			}
+			return m, nil
+
+		case "e":
+			// Open tag editor if on a track in Library or Queue
+			if m.activePanel == panels.PanelLibrary {
+				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
+					if track, ok := lib.SelectedTrack(); ok {
+						m.modalMode = ModalTagEdit
+						m.tagTrackPath = track.Path
+						m.tagTitle = track.Title
+						m.tagArtist = track.Artist
+						m.tagAlbum = track.Album
+						m.tagFieldIdx = 0
+					}
+				}
+			}
+			return m, nil
+
+		case "t":
+			// Cycle color theme
+			themeName := theme.CycleTheme()
+			_ = themeName
+			m.recalculateLayout()
+			return m, nil
+
+		// Enter: Play track immediately, open folder, or load playlist
 		case "enter":
 			if m.activePanel == panels.PanelLibrary {
 				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
@@ -162,13 +228,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_ = m.player.LoadFile(track.Path, "replace")
 					}
 				}
+			} else if m.activePanel == panels.PanelPlaylists {
+				if pl, ok := m.leftPanels[1].(*panels.PlaylistsPanel); ok {
+					if item, found := pl.SelectedPlaylist(); found && m.player != nil {
+						_ = m.player.LoadFile(item.Path, "replace")
+					}
+				}
 			} else if m.activePanel == panels.PanelFileBrowser {
 				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
 					if !fb.Enter() {
-						// It's a file, play it!
 						if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
 							_ = m.player.LoadFile(item.Path, "replace")
 						}
+					}
+				}
+			} else if m.activePanel == panels.PanelQueue {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok && m.player != nil {
+					if idx, _, found := q.SelectedTrack(); found {
+						_ = m.player.PlayIndex(idx)
 					}
 				}
 			}
@@ -182,12 +259,67 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_ = m.player.LoadFile(track.Path, "append")
 					}
 				}
+			} else if m.activePanel == panels.PanelPlaylists {
+				if pl, ok := m.leftPanels[1].(*panels.PlaylistsPanel); ok {
+					if item, found := pl.SelectedPlaylist(); found && m.player != nil {
+						_ = m.player.LoadFile(item.Path, "append")
+					}
+				}
 			} else if m.activePanel == panels.PanelFileBrowser {
 				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
 					if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
 						_ = m.player.LoadFile(item.Path, "append")
 					}
 				}
+			}
+			return m, nil
+
+		// d: Remove selected track from queue
+		case "d":
+			if m.activePanel == panels.PanelQueue && m.player != nil {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+					if idx, _, found := q.SelectedTrack(); found {
+						_ = m.player.RemoveFromPlaylist(idx)
+					}
+				}
+			}
+			return m, nil
+
+		// D: Clear queue
+		case "D":
+			if m.activePanel == panels.PanelQueue && m.player != nil {
+				_ = m.player.ClearPlaylist()
+			}
+			return m, nil
+
+		// Shift+Up: Move track up in queue
+		case "shift+up":
+			if m.activePanel == panels.PanelQueue && m.player != nil {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+					idx := q.Cursor()
+					if idx > 0 {
+						_ = m.player.MoveInPlaylist(idx, idx-1)
+						q.CursorUp()
+					}
+				}
+			}
+			return m, nil
+
+		// Shift+Down: Move track down in queue
+		case "shift+down":
+			if m.activePanel == panels.PanelQueue && m.player != nil {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+					idx := q.Cursor()
+					_ = m.player.MoveInPlaylist(idx, idx+1)
+					q.CursorDown()
+				}
+			}
+			return m, nil
+
+		// s: Shuffle playlist
+		case "s":
+			if m.player != nil {
+				_ = m.player.ShufflePlaylist()
 			}
 			return m, nil
 
@@ -298,7 +430,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentPanel().NextTab()
 			return m, nil
 
-		// Cursor navigation strictly with arrow keys (h/j/k/l are freed)
+		// Cursor navigation strictly with arrow keys
 		case "up":
 			m.currentPanel().CursorUp()
 			return m, nil
@@ -309,6 +441,99 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch m.modalMode {
+	case ModalHelp:
+		if key == "esc" || key == "?" || key == "enter" || key == "q" {
+			m.modalMode = ModalNone
+		}
+		return m, nil
+
+	case ModalSearch:
+		switch key {
+		case "esc":
+			m.modalMode = ModalNone
+			m.searchBuffer = ""
+			m.applySearchFilter()
+		case "enter":
+			m.modalMode = ModalNone
+		case "backspace":
+			if len(m.searchBuffer) > 0 {
+				m.searchBuffer = m.searchBuffer[:len(m.searchBuffer)-1]
+				m.applySearchFilter()
+			}
+		default:
+			if len(key) == 1 {
+				m.searchBuffer += key
+				m.applySearchFilter()
+			}
+		}
+		return m, nil
+
+	case ModalTagEdit:
+		switch key {
+		case "esc":
+			m.modalMode = ModalNone
+		case "tab", "down":
+			m.tagFieldIdx = (m.tagFieldIdx + 1) % 3
+		case "shift+tab", "up":
+			m.tagFieldIdx = (m.tagFieldIdx - 1 + 3) % 3
+		case "backspace":
+			switch m.tagFieldIdx {
+			case 0:
+				if len(m.tagTitle) > 0 {
+					m.tagTitle = m.tagTitle[:len(m.tagTitle)-1]
+				}
+			case 1:
+				if len(m.tagArtist) > 0 {
+					m.tagArtist = m.tagArtist[:len(m.tagArtist)-1]
+				}
+			case 2:
+				if len(m.tagAlbum) > 0 {
+					m.tagAlbum = m.tagAlbum[:len(m.tagAlbum)-1]
+				}
+			}
+		case "enter":
+			// Save metadata to file & SQLite
+			if m.storage != nil {
+				_ = m.storage.UpdateTrackMetadata(m.tagTrackPath, m.tagTitle, m.tagArtist, m.tagAlbum)
+				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
+					lib.Refresh()
+				}
+			}
+			m.modalMode = ModalNone
+		default:
+			if len(key) == 1 {
+				switch m.tagFieldIdx {
+				case 0:
+					m.tagTitle += key
+				case 1:
+					m.tagArtist += key
+				case 2:
+					m.tagAlbum += key
+				}
+			}
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m *Model) applySearchFilter() {
+	if m.activePanel == panels.PanelLibrary {
+		if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
+			lib.SetFilterQuery(m.searchBuffer)
+		}
+	} else if m.activePanel == panels.PanelQueue {
+		if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+			q.SetFilterQuery(m.searchBuffer)
+		}
+	}
 }
 
 func (m *Model) recalculateLayout() {
@@ -329,8 +554,6 @@ func (m *Model) recalculateLayout() {
 	m.queuePanel.SetSize(rightWidth, mainHeight)
 
 	// Accordion height split for left column (Panels 1, 2, 3)
-	// Active left panel takes ~60%, inactive take ~20% each.
-	// If Queue is focused, use m.lastLeftFocus to determine heights.
 	activeLeft := m.activePanel
 	if activeLeft == panels.PanelQueue {
 		activeLeft = m.lastLeftFocus
@@ -375,5 +598,84 @@ func (m *Model) View() string {
 	mainGrid := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, rightCol)
 
 	// Join main grid and status bar vertically
-	return lipgloss.JoinVertical(lipgloss.Left, mainGrid, m.statusPanel.View())
+	baseView := lipgloss.JoinVertical(lipgloss.Left, mainGrid, m.statusPanel.View())
+
+	// If modal is active, overlay it
+	if m.modalMode != ModalNone {
+		return m.renderModalOverlay(baseView)
+	}
+
+	return baseView
+}
+
+func (m *Model) renderModalOverlay(base string) string {
+	var modalContent string
+	var title string
+
+	switch m.modalMode {
+	case ModalHelp:
+		title = "Help & Keybindings"
+		modalContent = strings.Join([]string{
+			"0         Jump to Queue (Panel 0)",
+			"1, 2, 3   Jump to Library, Playlists, File Browser",
+			"Tab/S-Tab Cycle through panels",
+			"[ / ]     Switch sub-tabs (Dirs, Artists, Albums, Tracks)",
+			"↑ / ↓     Navigate items",
+			"Space     Play / Pause",
+			"> / <     Next / Previous track",
+			"+ / -     Volume Up / Down",
+			"Alt+←/→   Seek backward / forward 5s",
+			"Enter     Play track / Open directory",
+			"a         Append selected track to queue",
+			"d / D     Remove track / Clear queue",
+			"Shift+↑/↓ Move track up/down in queue",
+			"s         Shuffle queue",
+			"/         Live fuzzy search",
+			"e         Edit metadata tags",
+			"t         Cycle color theme",
+			"q / Q     Detach / Quit mpv daemon",
+			"",
+			"[Press Esc or ? to close]",
+		}, "\n")
+
+	case ModalSearch:
+		title = "Fuzzy Filter"
+		modalContent = fmt.Sprintf("Type to filter:\n\n  /%s█\n\n[Esc: Clear/Close | Enter: Confirm]", m.searchBuffer)
+
+	case ModalTagEdit:
+		title = "Edit Audio Metadata (ID3v2)"
+		cursor0, cursor1, cursor2 := "  ", "  ", "  "
+		switch m.tagFieldIdx {
+		case 0:
+			cursor0 = "> "
+		case 1:
+			cursor1 = "> "
+		case 2:
+			cursor2 = "> "
+		}
+
+		modalContent = strings.Join([]string{
+			fmt.Sprintf("File: %s", theme.KeybindDescStyle.Render(m.tagTrackPath)),
+			"",
+			fmt.Sprintf("%sTitle:  %s", cursor0, m.tagTitle),
+			fmt.Sprintf("%sArtist: %s", cursor1, m.tagArtist),
+			fmt.Sprintf("%sAlbum:  %s", cursor2, m.tagAlbum),
+			"",
+			"[Tab/Arrows: Next field | Enter: Save | Esc: Cancel]",
+		}, "\n")
+	}
+
+	box := theme.ModalBoxStyle.Width(min(60, m.width-4)).Render(
+		fmt.Sprintf("%s\n\n%s", theme.PanelTitleStyle.Render(title), modalContent),
+	)
+
+	return lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
+	)
 }
