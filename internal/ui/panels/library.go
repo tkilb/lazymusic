@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tylerkilburn/lazymusic/internal/library"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
 )
 
@@ -16,22 +17,45 @@ type LibraryPanel struct {
 	tabs    []string
 	curTab  int
 	cursor  int
+	storage *library.Storage
 	items   map[int][]string
+	tracks  []library.Track
 }
 
-// NewLibraryPanel creates a new LibraryPanel instance.
-func NewLibraryPanel() *LibraryPanel {
-	return &LibraryPanel{
-		tabs:   []string{"Dirs", "Artists", "Albums", "Tracks"},
-		curTab: 0,
-		cursor: 0,
-		items: map[int][]string{
-			0: {"~/Music", "~/Music/Daft Punk", "~/Music/Pink Floyd", "~/Music/Radiohead"},
-			1: {"Daft Punk", "Pink Floyd", "Radiohead"},
-			2: {"Discovery", "The Dark Side of the Moon", "Wish You Were Here", "OK Computer", "Kid A"},
-			3: {"Airbag", "Paranoid Android", "Subterranean Homesick Alien", "Exit Music (For a Film)", "Let Down", "Karma Police"},
-		},
+// NewLibraryPanel creates a new LibraryPanel instance connected to SQLite storage.
+func NewLibraryPanel(storage *library.Storage) *LibraryPanel {
+	p := &LibraryPanel{
+		tabs:    []string{"Dirs", "Artists", "Albums", "Tracks"},
+		curTab:  0,
+		cursor:  0,
+		storage: storage,
+		items:   make(map[int][]string),
 	}
+	p.Refresh()
+	return p
+}
+
+// Refresh reloads artists, albums, and tracks from SQLite.
+func (p *LibraryPanel) Refresh() {
+	if p.storage == nil {
+		return
+	}
+
+	artists, _ := p.storage.GetArtists()
+	albums, _ := p.storage.GetAlbums()
+	tracks, _ := p.storage.GetTracks()
+
+	p.tracks = tracks
+
+	var trackTitles []string
+	for _, t := range tracks {
+		trackTitles = append(trackTitles, fmt.Sprintf("%s - %s", t.Artist, t.Title))
+	}
+
+	p.items[0] = []string{"~/Music"}
+	p.items[1] = artists
+	p.items[2] = albums
+	p.items[3] = trackTitles
 }
 
 func (p *LibraryPanel) ID() PanelID {
@@ -80,6 +104,14 @@ func (p *LibraryPanel) CursorDown() {
 	if p.cursor < len(list)-1 {
 		p.cursor++
 	}
+}
+
+// SelectedTrack returns the currently highlighted track, if in the Tracks tab.
+func (p *LibraryPanel) SelectedTrack() (library.Track, bool) {
+	if p.curTab == 3 && p.cursor >= 0 && p.cursor < len(p.tracks) {
+		return p.tracks[p.cursor], true
+	}
+	return library.Track{}, false
 }
 
 func (p *LibraryPanel) Update(msg tea.Msg) (Panel, tea.Cmd) {

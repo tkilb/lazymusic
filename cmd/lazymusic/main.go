@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tylerkilburn/lazymusic/internal/config"
+	"github.com/tylerkilburn/lazymusic/internal/library"
 	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui"
 )
@@ -22,7 +23,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Warning: could not connect to mpv daemon (%v). Starting in offline mode.\n", err)
 	}
 
-	m := ui.NewModel(cfg, pClient)
+	storage, err := library.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to open library database (%v). Operating with empty cache.\n", err)
+	} else {
+		defer storage.Close()
+	}
+
+	m := ui.NewModel(cfg, pClient, storage)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

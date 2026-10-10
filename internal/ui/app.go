@@ -4,6 +4,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tylerkilburn/lazymusic/internal/config"
+	"github.com/tylerkilburn/lazymusic/internal/library"
 	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/panels"
 )
@@ -12,6 +13,7 @@ import (
 type Model struct {
 	cfg           *config.Config
 	player        *player.Client
+	storage       *library.Storage
 	width         int
 	height        int
 	activePanel   panels.PanelID
@@ -24,17 +26,24 @@ type Model struct {
 // PlaybackMsg wraps player state updates for Bubble Tea.
 type PlaybackMsg player.PlaybackState
 
+// LibraryScanMsg signals that a library background scan finished.
+type LibraryScanMsg struct {
+	TrackCount int
+	Err        error
+}
+
 // NewModel initializes the TUI model.
-func NewModel(cfg *config.Config, pClient *player.Client) *Model {
+func NewModel(cfg *config.Config, pClient *player.Client, storage *library.Storage) *Model {
 	m := &Model{
 		cfg:           cfg,
 		player:        pClient,
+		storage:       storage,
 		activePanel:   panels.PanelLibrary,
 		lastLeftFocus: panels.PanelLibrary,
 		leftPanels: []panels.Panel{
-			panels.NewLibraryPanel(),
+			panels.NewLibraryPanel(storage),
 			panels.NewPlaylistsPanel(),
-			panels.NewFileBrowserPanel(),
+			panels.NewFileBrowserPanel(""),
 		},
 		queuePanel:  panels.NewQueuePanel(),
 		statusPanel: panels.NewStatusPanel(),
@@ -44,7 +53,27 @@ func NewModel(cfg *config.Config, pClient *player.Client) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return m.listenPlayerEvents()
+	return tea.Batch(
+		m.listenPlayerEvents(),
+		m.scanLibraryCmd(),
+	)
+}
+
+func (m *Model) scanLibraryCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.storage == nil || m.cfg == nil {
+			return nil
+		}
+		total := 0
+		for _, dir := range m.cfg.MusicDirs {
+			count, err := m.storage.ScanDirectory(dir)
+			if err != nil {
+				return LibraryScanMsg{TrackCount: total, Err: err}
+			}
+			total += count
+		}
+		return LibraryScanMsg{TrackCount: total, Err: nil}
+	}
 }
 
 func (m *Model) listenPlayerEvents() tea.Cmd {
@@ -86,6 +115,13 @@ func (m *Model) currentPanel() panels.Panel {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case LibraryScanMsg:
+		// Refresh library panel with freshly scanned data
+		if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
+			lib.Refresh()
+		}
+		return m, nil
+
 	case PlaybackMsg:
 		m.statusPanel.SetPlaybackState(player.PlaybackState(msg))
 		return m, m.listenPlayerEvents()
@@ -117,6 +153,43 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.player.QuitDaemon()
 			}
 			return m, tea.Quit
+
+		// Enter: Play track immediately or open folder
+		case "enter":
+			if m.activePanel == panels.PanelLibrary {
+				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
+					if track, found := lib.SelectedTrack(); found && m.player != nil {
+						_ = m.player.LoadFile(track.Path, "replace")
+					}
+				}
+			} else if m.activePanel == panels.PanelFileBrowser {
+				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
+					if !fb.Enter() {
+						// It's a file, play it!
+						if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
+							_ = m.player.LoadFile(item.Path, "replace")
+						}
+					}
+				}
+			}
+			return m, nil
+
+		// a: Append to queue
+		case "a":
+			if m.activePanel == panels.PanelLibrary {
+				if lib, ok := m.leftPanels[0].(*panels.LibraryPanel); ok {
+					if track, found := lib.SelectedTrack(); found && m.player != nil {
+						_ = m.player.LoadFile(track.Path, "append")
+					}
+				}
+			} else if m.activePanel == panels.PanelFileBrowser {
+				if fb, ok := m.leftPanels[2].(*panels.FileBrowserPanel); ok {
+					if item, ok := fb.SelectedItem(); ok && !item.IsDir && m.player != nil {
+						_ = m.player.LoadFile(item.Path, "append")
+					}
+				}
+			}
+			return m, nil
 
 		// Playback controls
 		case " ":
