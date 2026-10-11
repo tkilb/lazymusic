@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/tylerkilburn/lazymusic/internal/player"
 	"github.com/tylerkilburn/lazymusic/internal/ui/statusbar"
 	"github.com/tylerkilburn/lazymusic/internal/ui/theme"
@@ -132,11 +133,12 @@ func (s *StatusPanel) View() string {
 		s.album,
 		s.year,
 	)
+	trackInfo = ansi.Truncate(trackInfo, innerWidth, "…")
 
 	// Line 2: Progress bar + format
 	timePrefix := fmt.Sprintf(" %s ", s.currTime)
 	timeSuffix := fmt.Sprintf(" %s   %s", s.totalTime, lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(s.format))
-	barWidth := innerWidth - len(timePrefix) - len(timeSuffix) - 1
+	barWidth := innerWidth - ansi.StringWidth(timePrefix) - ansi.StringWidth(timeSuffix) - 1
 	if barWidth < 10 {
 		barWidth = 10
 	}
@@ -158,12 +160,14 @@ func (s *StatusPanel) View() string {
 		}
 	}
 	progressLine := fmt.Sprintf("%s%s%s", timePrefix, bar.String(), timeSuffix)
+	progressLine = ansi.Truncate(progressLine, innerWidth, "…")
 
 	// Line 3: lazygit-style context-aware keybindings or active search prompt
 	controls := " " + statusbar.Render(s.bindings)
 	if s.searchPrompt != "" {
 		controls = " " + lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteGreen).Render(s.searchPrompt)
 	}
+	controls = ansi.Truncate(controls, innerWidth, "…")
 
 	lines := []string{trackInfo, progressLine, controls}
 	body := strings.Join(lines[:min(len(lines), innerHeight)], "\n")

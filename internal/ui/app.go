@@ -159,7 +159,8 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			}
 		} else {
 			local = []statusbar.Binding{
-				{Key: "→/Enter", Label: "inspect"},
+				{Key: "Enter", Label: "play all"},
+				{Key: "→", Label: "inspect"},
 				{Key: "a", Label: "queue all"},
 				{Key: "n", Label: "new"},
 				{Key: "d", Label: "delete"},
@@ -220,7 +221,8 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			}
 		}
 		return []statusbar.Binding{
-			{Key: "→ / Enter", Label: "inspect and edit playlist tracks"},
+			{Key: "Enter", Label: "play whole playlist (replaces queue)"},
+			{Key: "→", Label: "inspect and edit playlist tracks"},
 			{Key: "a", Label: "append all playlist tracks to queue"},
 			{Key: "n", Label: "create new empty playlist"},
 			{Key: "d", Label: "delete selected playlist"},
@@ -572,8 +574,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 				} else {
-					if m.playlistsPanel.OpenTracks() {
-						m.updateStatusBar()
+					if item, found := m.playlistsPanel.SelectedPlaylist(); found && m.player != nil {
+						if m.cfg != nil {
+							_, _ = panels.HealAndResolveM3U(item.Path, m.cfg.MusicDirs, m.storage)
+						}
+						_ = m.player.LoadFile(item.Path, "replace")
+						_ = m.player.PlayIndex(0)
+						_ = m.player.Unpause()
 					}
 				}
 			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
@@ -602,6 +609,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.playlistsPanel.ViewMode() == panels.PlaylistViewTracks {
 					if _, tr, found := m.playlistsPanel.SelectedTrack(); found && m.player != nil {
 						_, _ = m.player.AppendFile(tr.Path)
+						m.playlistsPanel.CursorDown()
 					}
 				} else {
 					if item, found := m.playlistsPanel.SelectedPlaylist(); found && m.player != nil {
@@ -609,11 +617,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							_, _ = panels.HealAndResolveM3U(item.Path, m.cfg.MusicDirs, m.storage)
 						}
 						_ = m.player.LoadFile(item.Path, "append")
+						m.playlistsPanel.CursorDown()
 					}
 				}
 			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
 				if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
 					_ = m.player.LoadFile(item.Path, "append")
+					m.fileBrowser.CursorDown()
 				}
 			}
 			return m, nil
