@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,6 +24,10 @@ const (
 	ModalHelp
 	ModalTagEdit
 	ModalAddDir
+	ModalNewPlaylist
+	ModalDeletePlaylist
+	ModalSaveQueue
+	ModalAddToPlaylist
 )
 
 // Model represents the main Bubble Tea model for lazymusic.
@@ -53,6 +59,14 @@ type Model struct {
 	tagArtist    string
 	tagAlbum     string
 	tagFieldIdx  int // 0: Title, 1: Artist, 2: Album
+
+	// Playlist modal states
+	playlistInputBuffer     string
+	playlistTargetTrack     string
+	playlistTargetTitle     string
+	playlistTargetArtist    string
+	playlistTargetDuration  int
+	playlistPickerIdx       int
 
 	// Preview state
 	previewing       bool
@@ -134,10 +148,24 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "/", Label: "search"},
 		}
 	case panels.PanelPlaylists:
-		local = []statusbar.Binding{
-			{Key: "Enter", Label: "load"},
-			{Key: "a", Label: "queue"},
-			{Key: "/", Label: "search"},
+		if m.playlistsPanel != nil && m.playlistsPanel.ViewMode() == panels.PlaylistViewTracks {
+			local = []statusbar.Binding{
+				{Key: "Enter", Label: "play track"},
+				{Key: "←/Esc", Label: "back"},
+				{Key: "d", Label: "remove"},
+				{Key: "a", Label: "queue"},
+				{Key: "Shift+↑/↓", Label: "reorder"},
+				{Key: "/", Label: "search"},
+			}
+		} else {
+			local = []statusbar.Binding{
+				{Key: "→/Enter", Label: "inspect"},
+				{Key: "a", Label: "queue all"},
+				{Key: "n", Label: "new"},
+				{Key: "d", Label: "delete"},
+				{Key: "Shift+↑/↓", Label: "reorder"},
+				{Key: "/", Label: "search"},
+			}
 		}
 	case panels.PanelFileBrowser:
 		local = []statusbar.Binding{
@@ -145,6 +173,7 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "←", Label: "back"},
 			{Key: "A", Label: "add to lib"},
 			{Key: "a", Label: "queue"},
+			{Key: "p", Label: "add to pl"},
 			{Key: "/", Label: "search"},
 		}
 	case panels.PanelQueue:
@@ -152,6 +181,8 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "Space/Enter", Label: "play"},
 			{Key: "d", Label: "remove"},
 			{Key: "D", Label: "clear"},
+			{Key: "S", Label: "save pl"},
+			{Key: "p", Label: "add to pl"},
 			{Key: "s", Label: "shuffle"},
 			{Key: "l/L", Label: "loop"},
 			{Key: "Shift+↑/↓", Label: "reorder"},
@@ -176,9 +207,26 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "/", Label: "search music directories"},
 		}
 	case panels.PanelPlaylists:
+		if m.playlistsPanel != nil && m.playlistsPanel.ViewMode() == panels.PlaylistViewTracks {
+			return []statusbar.Binding{
+				{Key: "Enter", Label: "play track (loads playlist at this track)"},
+				{Key: "← / Esc", Label: "go back to playlists list"},
+				{Key: "d", Label: "remove track from playlist"},
+				{Key: "a", Label: "append track to queue"},
+				{Key: "Shift+↑", Label: "move track up in playlist"},
+				{Key: "Shift+↓", Label: "move track down in playlist"},
+				{Key: "r", Label: "refresh tracks from disk"},
+				{Key: "/", Label: "search tracks in playlist"},
+			}
+		}
 		return []statusbar.Binding{
-			{Key: "Enter", Label: "load playlist (replaces queue)"},
+			{Key: "→ / Enter", Label: "inspect and edit playlist tracks"},
 			{Key: "a", Label: "append all playlist tracks to queue"},
+			{Key: "n", Label: "create new empty playlist"},
+			{Key: "d", Label: "delete selected playlist"},
+			{Key: "Shift+↑", Label: "move selected playlist up in order"},
+			{Key: "Shift+↓", Label: "move selected playlist down in order"},
+			{Key: "r", Label: "rescan playlists from disk"},
 			{Key: "/", Label: "search playlists"},
 		}
 	case panels.PanelFileBrowser:
@@ -187,6 +235,7 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "←", Label: "go back to previous directory (Yazi-style)"},
 			{Key: "A", Label: "add current directory to Library Music Dirs"},
 			{Key: "a", Label: "append selected audio file to queue"},
+			{Key: "p", Label: "add selected audio file to a playlist"},
 			{Key: "/", Label: "search files and directories"},
 		}
 	case panels.PanelQueue:
@@ -194,6 +243,8 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "Space / Enter", Label: "play selected track (or pause if currently playing)"},
 			{Key: "d", Label: "remove selected track from queue"},
 			{Key: "D", Label: "clear entire queue"},
+			{Key: "S", Label: "save current queue as an M3U playlist"},
+			{Key: "p", Label: "add selected track to a playlist"},
 			{Key: "Shift+↑", Label: "move selected track up in queue"},
 			{Key: "Shift+↓", Label: "move selected track down in queue"},
 			{Key: "s", Label: "shuffle queue"},
@@ -239,6 +290,29 @@ func (m *Model) helpSections() []helppopup.Section {
 func (m *Model) updateStatusBar() {
 	if m.statusPanel != nil {
 		m.statusPanel.SetKeybindings(m.statusBindings())
+	}
+}
+
+func (m *Model) openAddToPlaylist(filePath, title, artist string, duration int) {
+	if m.playlistsPanel != nil {
+		m.playlistsPanel.Refresh()
+	}
+	m.modalMode = ModalAddToPlaylist
+	m.playlistTargetTrack = filePath
+	m.playlistTargetTitle = title
+	m.playlistTargetArtist = artist
+	m.playlistTargetDuration = duration
+	m.playlistPickerIdx = 0
+	if m.playlistsPanel != nil {
+		if activePl, ok := m.playlistsPanel.ActivePlaylist(); ok {
+			items := m.playlistsPanel.Items()
+			for i, pl := range items {
+				if pl.Path == activePl.Path {
+					m.playlistPickerIdx = i + 1
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -428,16 +502,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "n":
-			m.nextSearchMatch()
+			if m.hasActiveSearch() {
+				m.nextSearchMatch()
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil && m.playlistsPanel.ViewMode() == panels.PlaylistViewList {
+				m.modalMode = ModalNewPlaylist
+				m.playlistInputBuffer = ""
+				m.playlistTargetTrack = ""
+			}
 			return m, nil
 
 		case "N":
-			m.prevSearchMatch()
+			if m.hasActiveSearch() {
+				m.prevSearchMatch()
+			}
 			return m, nil
 
 		case "esc":
 			if m.hasActiveSearch() {
 				m.clearActiveSearch()
+				return m, nil
+			}
+			if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil && m.playlistsPanel.ViewMode() == panels.PlaylistViewTracks {
+				m.playlistsPanel.CloseTracks()
+				m.updateStatusBar()
 				return m, nil
 			}
 			return m, nil
@@ -458,7 +545,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		// Enter: Open directory in File Browser, load playlist, or play track
+		// Enter: Open directory in File Browser, inspect playlist / play track, or play track
 		case "enter":
 			if m.activePanel == panels.PanelLibrary && m.libraryPanel != nil {
 				if dir, found := m.libraryPanel.SelectedDir(); found {
@@ -473,9 +560,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.recalculateLayout()
 				}
 			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
-				if item, found := m.playlistsPanel.SelectedPlaylist(); found && m.player != nil {
-					_ = m.player.LoadFile(item.Path, "replace")
-					_ = m.player.Unpause()
+				if m.playlistsPanel.ViewMode() == panels.PlaylistViewTracks {
+					if trIdx, _, found := m.playlistsPanel.SelectedTrack(); found && m.player != nil {
+						if item, ok := m.playlistsPanel.ActivePlaylist(); ok {
+							if m.cfg != nil {
+								_, _ = panels.HealAndResolveM3U(item.Path, m.cfg.MusicDirs, m.storage)
+							}
+							_ = m.player.LoadFile(item.Path, "replace")
+							_ = m.player.PlayIndex(trIdx)
+							_ = m.player.Unpause()
+						}
+					}
+				} else {
+					if m.playlistsPanel.OpenTracks() {
+						m.updateStatusBar()
+					}
 				}
 			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
 				if !m.fileBrowser.Enter() {
@@ -500,8 +599,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.addDirBuffer = ""
 				return m, nil
 			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
-				if item, found := m.playlistsPanel.SelectedPlaylist(); found && m.player != nil {
-					_ = m.player.LoadFile(item.Path, "append")
+				if m.playlistsPanel.ViewMode() == panels.PlaylistViewTracks {
+					if _, tr, found := m.playlistsPanel.SelectedTrack(); found && m.player != nil {
+						_, _ = m.player.AppendFile(tr.Path)
+					}
+				} else {
+					if item, found := m.playlistsPanel.SelectedPlaylist(); found && m.player != nil {
+						if m.cfg != nil {
+							_, _ = panels.HealAndResolveM3U(item.Path, m.cfg.MusicDirs, m.storage)
+						}
+						_ = m.player.LoadFile(item.Path, "append")
+					}
 				}
 			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
 				if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
@@ -527,7 +635,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		// d: Remove directory (in Library) or remove track from queue (in Queue)
+		// d: Remove directory (in Library), remove track from queue (in Queue), or delete playlist/track (in Playlists)
 		case "d":
 			if m.activePanel == panels.PanelLibrary && m.cfg != nil && m.libraryPanel != nil {
 				if dir, found := m.libraryPanel.SelectedDir(); found {
@@ -544,13 +652,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						_ = m.player.RemoveFromPlaylist(idx)
 					}
 				}
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				if m.playlistsPanel.ViewMode() == panels.PlaylistViewTracks {
+					m.playlistsPanel.RemoveSelectedTrack()
+					m.updateStatusBar()
+				} else {
+					if _, found := m.playlistsPanel.SelectedPlaylist(); found {
+						m.modalMode = ModalDeletePlaylist
+					}
+				}
 			}
 			return m, nil
 
-		// r: Rescan library directories
+		// r: Rescan library directories or refresh playlists / playlist tracks
 		case "r":
 			if m.activePanel == panels.PanelLibrary {
 				return m, m.scanLibraryCmd()
+			}
+			if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				m.playlistsPanel.Refresh()
+				return m, nil
 			}
 			return m, nil
 
@@ -561,7 +682,54 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		// Shift+Up: Move track up in queue
+		// S: Save queue to playlist
+		case "S":
+			if m.activePanel == panels.PanelQueue {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok && q.Len() > 0 {
+					m.modalMode = ModalSaveQueue
+					m.playlistInputBuffer = ""
+				}
+			}
+			return m, nil
+
+		// p: Add track to playlist
+		case "p":
+			if m.activePanel == panels.PanelQueue {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+					if _, item, ok := q.SelectedTrack(); ok {
+						title := item.Title
+						artist := ""
+						duration := 0
+						if m.storage != nil {
+							if tr, err := m.storage.GetTrack(item.Filename); err == nil && tr != nil {
+								if tr.Title != "" {
+									title = tr.Title
+								}
+								artist = tr.Artist
+								duration = int(tr.Duration)
+							}
+						}
+						m.openAddToPlaylist(item.Filename, title, artist, duration)
+					}
+				}
+			} else if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
+				if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir {
+					title := ""
+					artist := ""
+					duration := 0
+					if m.storage != nil {
+						if tr, err := m.storage.GetTrack(item.Path); err == nil && tr != nil {
+							title = tr.Title
+							artist = tr.Artist
+							duration = int(tr.Duration)
+						}
+					}
+					m.openAddToPlaylist(item.Path, title, artist, duration)
+				}
+			}
+			return m, nil
+
+		// Shift+Up: Move track up in queue or move playlist up
 		case "shift+up", "ctrl+shift+up":
 			if m.activePanel == panels.PanelQueue && m.player != nil {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
@@ -572,10 +740,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						q.CursorUp()
 					}
 				}
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				m.playlistsPanel.MoveUp()
 			}
 			return m, nil
 
-		// Shift+Down: Move track down in queue
+		// Shift+Down: Move track down in queue or move playlist down
 		case "shift+down", "ctrl+shift+down":
 			if m.activePanel == panels.PanelQueue && m.player != nil {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
@@ -586,6 +756,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						q.CursorDown()
 					}
 				}
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				m.playlistsPanel.MoveDown()
 			}
 			return m, nil
 
@@ -753,10 +925,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentPanel().PageUp()
 			return m, nil
 
-		// Yazi-like navigation for File Browser (left: parent directory, right: enter directory / play file)
+		// Yazi-like navigation for File Browser & Playlists (left: parent directory / back to playlists, right: enter directory / inspect playlist)
 		case "left":
 			if m.activePanel == panels.PanelFileBrowser && m.fileBrowser != nil {
 				m.fileBrowser.GoParent()
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				if m.playlistsPanel.CloseTracks() {
+					m.updateStatusBar()
+				}
 			}
 			return m, nil
 
@@ -766,6 +942,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if item, ok := m.fileBrowser.SelectedItem(); ok && !item.IsDir && m.player != nil {
 						m.playPreview(item.Path)
 					}
+				}
+			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
+				if m.playlistsPanel.OpenTracks() {
+					m.updateStatusBar()
 				}
 			}
 			return m, nil
@@ -913,6 +1093,165 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(key) == 1 {
 				m.addDirBuffer += key
 			}
+		}
+		return m, nil
+
+	case ModalNewPlaylist:
+		switch key {
+		case "esc":
+			m.modalMode = ModalNone
+			m.playlistInputBuffer = ""
+			m.playlistTargetTrack = ""
+		case "backspace":
+			if len(m.playlistInputBuffer) > 0 {
+				m.playlistInputBuffer = m.playlistInputBuffer[:len(m.playlistInputBuffer)-1]
+			}
+		case "enter":
+			name := strings.TrimSpace(m.playlistInputBuffer)
+			if name != "" && m.cfg != nil {
+				if !strings.HasSuffix(strings.ToLower(name), ".m3u") && !strings.HasSuffix(strings.ToLower(name), ".m3u8") {
+					name += ".m3u"
+				}
+				filePath := filepath.Join(m.cfg.PlaylistsDir, name)
+				var entries []panels.M3UEntry
+				if m.playlistTargetTrack != "" {
+					entries = []panels.M3UEntry{
+						{
+							Path:     m.playlistTargetTrack,
+							Title:    m.playlistTargetTitle,
+							Artist:   m.playlistTargetArtist,
+							Duration: m.playlistTargetDuration,
+						},
+					}
+				}
+				_ = panels.WriteM3U(filePath, entries)
+				if m.playlistsPanel != nil {
+					m.playlistsPanel.CloseTracks()
+					m.playlistsPanel.Refresh()
+					m.playlistsPanel.SelectByName(name)
+				}
+			}
+			m.modalMode = ModalNone
+			m.playlistInputBuffer = ""
+			m.playlistTargetTrack = ""
+		default:
+			if len(key) == 1 {
+				m.playlistInputBuffer += key
+			}
+		}
+		return m, nil
+
+	case ModalDeletePlaylist:
+		switch key {
+		case "esc", "n", "N":
+			m.modalMode = ModalNone
+		case "y", "Y", "enter":
+			if m.playlistsPanel != nil {
+				if item, ok := m.playlistsPanel.SelectedPlaylist(); ok {
+					_ = os.Remove(item.Path)
+					m.playlistsPanel.Refresh()
+				}
+			}
+			m.modalMode = ModalNone
+		}
+		return m, nil
+
+	case ModalSaveQueue:
+		switch key {
+		case "esc":
+			m.modalMode = ModalNone
+			m.playlistInputBuffer = ""
+		case "backspace":
+			if len(m.playlistInputBuffer) > 0 {
+				m.playlistInputBuffer = m.playlistInputBuffer[:len(m.playlistInputBuffer)-1]
+			}
+		case "enter":
+			name := strings.TrimSpace(m.playlistInputBuffer)
+			if name != "" && m.cfg != nil {
+				if !strings.HasSuffix(strings.ToLower(name), ".m3u") && !strings.HasSuffix(strings.ToLower(name), ".m3u8") {
+					name += ".m3u"
+				}
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
+					items := q.Playlist()
+					entries := make([]panels.M3UEntry, 0, len(items))
+					for _, it := range items {
+						title := it.Title
+						artist := ""
+						dur := 0
+						if m.storage != nil {
+							if tr, err := m.storage.GetTrack(it.Filename); err == nil && tr != nil {
+								if tr.Title != "" {
+									title = tr.Title
+								}
+								artist = tr.Artist
+								dur = int(tr.Duration)
+							}
+						}
+						entries = append(entries, panels.M3UEntry{
+							Path:     it.Filename,
+							Title:    title,
+							Artist:   artist,
+							Duration: dur,
+						})
+					}
+					filePath := filepath.Join(m.cfg.PlaylistsDir, name)
+					_ = panels.WriteM3U(filePath, entries)
+					if m.playlistsPanel != nil {
+						m.playlistsPanel.Refresh()
+						m.playlistsPanel.SelectByName(name)
+					}
+				}
+			}
+			m.modalMode = ModalNone
+			m.playlistInputBuffer = ""
+		default:
+			if len(key) == 1 {
+				m.playlistInputBuffer += key
+			}
+		}
+		return m, nil
+
+	case ModalAddToPlaylist:
+		itemsCount := 1
+		if m.playlistsPanel != nil {
+			itemsCount += m.playlistsPanel.Len()
+		}
+		switch key {
+		case "esc":
+			m.modalMode = ModalNone
+			m.playlistTargetTrack = ""
+		case "up", "k":
+			if m.playlistPickerIdx > 0 {
+				m.playlistPickerIdx--
+			}
+		case "down", "j":
+			if m.playlistPickerIdx < itemsCount-1 {
+				m.playlistPickerIdx++
+			}
+		case "enter":
+			if m.playlistPickerIdx == 0 {
+				// Switch to create new playlist with this target track attached
+				m.modalMode = ModalNewPlaylist
+				m.playlistInputBuffer = ""
+				return m, nil
+			}
+			if m.playlistsPanel != nil {
+				playlists := m.playlistsPanel.Items()
+				targetIdx := m.playlistPickerIdx - 1
+				if targetIdx >= 0 && targetIdx < len(playlists) {
+					targetPl := playlists[targetIdx]
+					entry := panels.M3UEntry{
+						Path:     m.playlistTargetTrack,
+						Title:    m.playlistTargetTitle,
+						Artist:   m.playlistTargetArtist,
+						Duration: m.playlistTargetDuration,
+					}
+					_ = panels.AppendToM3U(targetPl.Path, entry)
+					m.playlistsPanel.Refresh()
+				}
+			}
+			m.modalMode = ModalNone
+			m.playlistTargetTrack = ""
 		}
 		return m, nil
 	}
@@ -1146,59 +1485,89 @@ func (m *Model) View() string {
 func (m *Model) renderModalOverlay(base string) string {
 	if m.modalMode == ModalHelp {
 		helpBox := helppopup.Box(m.helpSections(), m.width, m.height, m.helpScroll)
-		return lipgloss.Place(
-			m.width,
-			m.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			helpBox,
-			lipgloss.WithWhitespaceChars(" "),
-			lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
-		)
+		return theme.Overlay(base, helpBox, m.width, m.height)
 	}
 
-	var modalContent string
-	var title string
-
+	var box string
 	switch m.modalMode {
 	case ModalAddDir:
-		title = "Add Music Directory"
-		modalContent = fmt.Sprintf("Enter directory path:\n\n  %s█\n\n[Esc: Cancel | Enter: Add & Scan]", m.addDirBuffer)
+		content := " " + m.addDirBuffer + "█"
+		box = theme.PopupBox("Add Music Directory", "<enter> to add, <esc> to cancel", content, m.width)
 
 	case ModalTagEdit:
-		title = "Edit Audio Metadata (ID3v2)"
-		cursor0, cursor1, cursor2 := "  ", "  ", "  "
+		cursor0, cursor1, cursor2 := "", "", ""
 		switch m.tagFieldIdx {
 		case 0:
-			cursor0 = "> "
+			cursor0 = "█"
 		case 1:
-			cursor1 = "> "
+			cursor1 = "█"
 		case 2:
-			cursor2 = "> "
+			cursor2 = "█"
+		}
+		boxes := []string{
+			theme.FieldBox("Title", "", " "+m.tagTitle+cursor0, m.tagFieldIdx == 0, m.width),
+			theme.FieldBox("Artist", "", " "+m.tagArtist+cursor1, m.tagFieldIdx == 1, m.width),
+			theme.FieldBox("Album", "<tab> next, <enter> to save, <esc> cancel", " "+m.tagAlbum+cursor2, m.tagFieldIdx == 2, m.width),
+		}
+		box = strings.Join(boxes, "\n")
+
+	case ModalNewPlaylist:
+		content := " " + m.playlistInputBuffer + "█"
+		box = theme.PopupBox("New Playlist", "<enter> to create, <esc> to cancel", content, m.width)
+
+	case ModalDeletePlaylist:
+		name := ""
+		if m.playlistsPanel != nil {
+			if item, ok := m.playlistsPanel.SelectedPlaylist(); ok {
+				name = item.Name
+			}
+		}
+		content := fmt.Sprintf(" Delete playlist %q? This cannot be undone.", name)
+		box = theme.PopupBox("Delete Playlist", "(y/enter) confirm, (n/esc) cancel", content, m.width, theme.PaletteRed)
+
+	case ModalSaveQueue:
+		content := " " + m.playlistInputBuffer + "█"
+		box = theme.PopupBox("Save Queue", "<enter> to save, <esc> to cancel", content, m.width)
+
+	case ModalAddToPlaylist:
+		trackLabel := m.playlistTargetTitle
+		if trackLabel == "" {
+			trackLabel = filepath.Base(m.playlistTargetTrack)
+		}
+		if m.playlistTargetArtist != "" {
+			trackLabel = fmt.Sprintf("%s - %s", m.playlistTargetArtist, trackLabel)
 		}
 
-		modalContent = strings.Join([]string{
-			fmt.Sprintf("File: %s", lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(m.tagTrackPath)),
-			"",
-			fmt.Sprintf("%sTitle:  %s", cursor0, m.tagTitle),
-			fmt.Sprintf("%sArtist: %s", cursor1, m.tagArtist),
-			fmt.Sprintf("%sAlbum:  %s", cursor2, m.tagAlbum),
-			"",
-			"[Tab/Arrows: Next field | Enter: Save | Esc: Cancel]",
-		}, "\n")
+		var options []string
+		options = append(options, "+ Create New Playlist...")
+		if m.playlistsPanel != nil {
+			for _, pl := range m.playlistsPanel.Items() {
+				options = append(options, pl.Name)
+			}
+		}
+
+		var listLines []string
+		listLines = append(listLines, fmt.Sprintf(" Track: %s", lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(trackLabel)), "")
+
+		visibleMax := 7
+		startIdx := 0
+		if m.playlistPickerIdx >= visibleMax {
+			startIdx = m.playlistPickerIdx - visibleMax + 1
+		}
+		endIdx := min(len(options), startIdx+visibleMax)
+
+		for i := startIdx; i < endIdx; i++ {
+			opt := options[i]
+			cursor := "   "
+			style := lipgloss.NewStyle()
+			if i == m.playlistPickerIdx {
+				cursor = " > "
+				style = theme.CursorRowStyle
+			}
+			listLines = append(listLines, fmt.Sprintf("%s%s", cursor, style.Render(opt)))
+		}
+		box = theme.PopupBox("Add to Playlist", "<enter> to add, <esc> to cancel", strings.Join(listLines, "\n"), m.width)
 	}
 
-	box := theme.ModalBoxStyle.Width(min(60, m.width-4)).Render(
-		fmt.Sprintf("%s\n\n%s", lipgloss.NewStyle().Bold(true).Foreground(theme.PaletteGreen).Render(title), modalContent),
-	)
-
-	return lipgloss.Place(
-		m.width,
-		m.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		box,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
-	)
+	return theme.Overlay(base, box, m.width, m.height)
 }

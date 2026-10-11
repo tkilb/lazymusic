@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Standard lazygit palette definitions matching lazygit's default theme:
@@ -149,7 +150,11 @@ func frameBody(top, footer, body string, width, height int, lineStyle lipgloss.S
 	for i := 0; i < height; i++ {
 		b.WriteString(side)
 		if i < len(lines) {
+			w := ansi.StringWidth(lines[i])
 			b.WriteString(lines[i])
+			if w < width {
+				b.WriteString(strings.Repeat(" ", width-w))
+			}
 		} else {
 			b.WriteString(strings.Repeat(" ", width))
 		}

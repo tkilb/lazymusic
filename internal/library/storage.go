@@ -231,6 +231,29 @@ func (s *Storage) GetTracks() ([]Track, error) {
 	return tracks, nil
 }
 
+// GetTrack retrieves a track by its exact file path.
+func (s *Storage) GetTrack(path string) (*Track, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.db == nil {
+		return nil, nil
+	}
+
+	row := s.db.QueryRow("SELECT id, path, title, artist, album, genre, year, track_num, duration, format, mod_time FROM tracks WHERE path = ?", path)
+	var t Track
+	var genre, format sql.NullString
+	if err := row.Scan(&t.ID, &t.Path, &t.Title, &t.Artist, &t.Album, &genre, &t.Year, &t.TrackNum, &t.Duration, &format, &t.ModTime); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	t.Genre = genre.String
+	t.Format = format.String
+	return &t, nil
+}
+
 // GetTracksByArtist retrieves tracks by a specific artist.
 func (s *Storage) GetTracksByArtist(artist string) ([]Track, error) {
 	s.mu.RLock()
@@ -277,6 +300,60 @@ func (s *Storage) GetTracksByAlbum(album string) ([]Track, error) {
 		}
 	}
 	return tracks, nil
+}
+
+// FindTrackMatch searches for a track in the library matching metadata.
+// Used by the playlist self-healing engine to recover tracks whose paths have moved.
+// 1. Matches title AND artist (case-insensitive)
+// 2. Fallback: matches filename basename (LIKE '%/basename')
+// 3. Fallback: matches title (case-insensitive)
+func (s *Storage) FindTrackMatch(title, artist, filename string) (*Track, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.db == nil {
+		return nil, nil
+	}
+
+	scanRow := func(query string, args ...interface{}) *Track {
+		row := s.db.QueryRow(query, args...)
+		var t Track
+		var genre, format sql.NullString
+		if err := row.Scan(&t.ID, &t.Path, &t.Title, &t.Artist, &t.Album, &genre, &t.Year, &t.TrackNum, &t.Duration, &format, &t.ModTime); err == nil {
+			t.Genre = genre.String
+			t.Format = format.String
+			if _, err := os.Stat(t.Path); err == nil {
+				return &t
+			}
+		}
+		return nil
+	}
+
+	// 1. Try matching title + artist
+	if title != "" && artist != "" {
+		if t := scanRow("SELECT id, path, title, artist, album, genre, year, track_num, duration, format, mod_time FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) LIMIT 1", title, artist); t != nil {
+			return t, nil
+		}
+	}
+
+	// 2. Try matching filename basename
+	if filename != "" {
+		base := filepath.Base(filename)
+		if base != "" && base != "." {
+			if t := scanRow("SELECT id, path, title, artist, album, genre, year, track_num, duration, format, mod_time FROM tracks WHERE path LIKE ? LIMIT 1", "%/"+base); t != nil {
+				return t, nil
+			}
+		}
+	}
+
+	// 3. Try matching title only
+	if title != "" {
+		if t := scanRow("SELECT id, path, title, artist, album, genre, year, track_num, duration, format, mod_time FROM tracks WHERE LOWER(title) = LOWER(?) LIMIT 1", title); t != nil {
+			return t, nil
+		}
+	}
+
+	return nil, nil
 }
 
 // SupportedExtensions lists recognized audio formats.
