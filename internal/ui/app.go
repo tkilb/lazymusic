@@ -28,6 +28,7 @@ const (
 	ModalDeletePlaylist
 	ModalSaveQueue
 	ModalAddToPlaylist
+	ModalExportQueue
 )
 
 // Model represents the main Bubble Tea model for lazymusic.
@@ -75,6 +76,9 @@ type Model struct {
 	previewPos       int
 	previewSavedPos  int
 	previewSavedTime float64
+
+	// Export modal state
+	exportState ExportState
 }
 
 // PlaybackMsg wraps player state updates for Bubble Tea.
@@ -183,6 +187,7 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "d", Label: "remove"},
 			{Key: "D", Label: "clear"},
 			{Key: "S", Label: "save pl"},
+			{Key: "E", Label: "export"},
 			{Key: "p", Label: "add to pl"},
 			{Key: "s", Label: "shuffle"},
 			{Key: "l/L", Label: "loop"},
@@ -246,6 +251,7 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "d", Label: "remove selected track from queue"},
 			{Key: "D", Label: "clear entire queue"},
 			{Key: "S", Label: "save current queue as an M3U playlist"},
+			{Key: "E", Label: "export copied audio files from queue to directory"},
 			{Key: "p", Label: "add selected track to a playlist"},
 			{Key: "Shift+↑", Label: "move selected track up in queue"},
 			{Key: "Shift+↓", Label: "move selected track down in queue"},
@@ -381,6 +387,15 @@ func (m *Model) currentPanel() panels.Panel {
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case ExportProgressMsg:
+		m.exportState.running = false
+		m.exportState.done = true
+		m.exportState.total = msg.Total
+		m.exportState.copied = msg.Copied
+		m.exportState.lastErr = msg.Err
+		m.exportState.targetDir = msg.TargetDir
+		return m, nil
+
 	case LibraryScanMsg:
 		if m.libraryPanel != nil {
 			m.libraryPanel.Refresh()
@@ -698,6 +713,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok && q.Len() > 0 {
 					m.modalMode = ModalSaveQueue
 					m.playlistInputBuffer = ""
+				}
+			}
+			return m, nil
+
+		// E: Export copied music files from queue to destination directory
+		case "E":
+			if m.activePanel == panels.PanelQueue {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok && q.Len() > 0 {
+					m.modalMode = ModalExportQueue
+					m.exportState = newExportState()
 				}
 			}
 			return m, nil
@@ -1264,6 +1289,66 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.playlistTargetTrack = ""
 		}
 		return m, nil
+
+	case ModalExportQueue:
+		if m.exportState.running {
+			return m, nil
+		}
+		if m.exportState.done {
+			switch key {
+			case "esc", "enter", "q":
+				m.modalMode = ModalNone
+				m.exportState = newExportState()
+			}
+			return m, nil
+		}
+
+		switch key {
+		case "esc":
+			m.modalMode = ModalNone
+			m.exportState = newExportState()
+		case "1":
+			m.exportState.namingMode = ExportFlatOriginal
+		case "2":
+			m.exportState.namingMode = ExportNumbered
+		case "up":
+			if len(m.exportState.suggestions) > 0 {
+				if m.exportState.selectedSugIdx > 0 {
+					m.exportState.selectedSugIdx--
+				}
+			}
+		case "down":
+			if len(m.exportState.suggestions) > 0 {
+				if m.exportState.selectedSugIdx < len(m.exportState.suggestions)-1 {
+					m.exportState.selectedSugIdx++
+				}
+			}
+		case "tab":
+			if len(m.exportState.suggestions) > 0 && m.exportState.selectedSugIdx < len(m.exportState.suggestions) {
+				m.exportState.pathInput = m.exportState.suggestions[m.exportState.selectedSugIdx] + "/"
+				m.exportState.updateSuggestions()
+			}
+		case "backspace":
+			if len(m.exportState.pathInput) > 0 {
+				m.exportState.pathInput = m.exportState.pathInput[:len(m.exportState.pathInput)-1]
+				m.exportState.updateSuggestions()
+			}
+		case "enter":
+			target := strings.TrimSpace(m.exportState.pathInput)
+			if target != "" {
+				if q, ok := m.queuePanel.(*panels.QueuePanel); ok && q.Len() > 0 {
+					m.exportState.running = true
+					m.exportState.targetDir = target
+					return m, m.startExportCmd(target, m.exportState.namingMode, q.Playlist())
+				}
+			}
+		default:
+			if len(key) == 1 {
+				m.exportState.pathInput += key
+				m.exportState.updateSuggestions()
+			}
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -1577,6 +1662,9 @@ func (m *Model) renderModalOverlay(base string) string {
 			listLines = append(listLines, fmt.Sprintf("%s%s", cursor, style.Render(opt)))
 		}
 		box = theme.PopupBox("Add to Playlist", "<enter> to add, <esc> to cancel", strings.Join(listLines, "\n"), m.width)
+
+	case ModalExportQueue:
+		return theme.Overlay(base, renderExportModal(m), m.width, m.height)
 	}
 
 	return theme.Overlay(base, box, m.width, m.height)
