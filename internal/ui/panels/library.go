@@ -99,6 +99,31 @@ func (p *LibraryPanel) CursorDown() {
 func (p *LibraryPanel) PageUp()   { p.cursor = pageMove(p.cursor, len(p.dirs), p.height, -1) }
 func (p *LibraryPanel) PageDown() { p.cursor = pageMove(p.cursor, len(p.dirs), p.height, 1) }
 
+// MoveUp moves the selected directory up one position and persists the order to config.
+func (p *LibraryPanel) MoveUp() {
+	if p.cursor <= 0 || p.cursor >= len(p.dirs) {
+		return
+	}
+	p.dirs[p.cursor], p.dirs[p.cursor-1] = p.dirs[p.cursor-1], p.dirs[p.cursor]
+	if p.cfg != nil {
+		p.cfg.MoveMusicDir(p.cursor, p.cursor-1)
+	}
+	p.cursor--
+}
+
+// MoveDown moves the selected directory down one position and persists the order to config.
+func (p *LibraryPanel) MoveDown() {
+	if p.cursor < 0 || p.cursor >= len(p.dirs)-1 {
+		return
+	}
+	p.dirs[p.cursor], p.dirs[p.cursor+1] = p.dirs[p.cursor+1], p.dirs[p.cursor]
+	if p.cfg != nil {
+		p.cfg.MoveMusicDir(p.cursor, p.cursor+1)
+	}
+	p.cursor++
+}
+
+
 // Search sets query as the active search and jumps cursor to nearest match.
 func (p *LibraryPanel) Search(query string) bool {
 	p.filterQuery = query

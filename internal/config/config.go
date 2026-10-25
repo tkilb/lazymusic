@@ -82,6 +82,16 @@ func (c *Config) AddMusicDir(dir string) bool {
 	return true
 }
 
+// MoveMusicDir moves a directory up or down in the list.
+func (c *Config) MoveMusicDir(from, to int) bool {
+	if from < 0 || from >= len(c.MusicDirs) || to < 0 || to >= len(c.MusicDirs) || from == to {
+		return false
+	}
+	c.MusicDirs[from], c.MusicDirs[to] = c.MusicDirs[to], c.MusicDirs[from]
+	_ = c.Save()
+	return true
+}
+
 // RemoveMusicDir removes a directory from the configuration.
 func (c *Config) RemoveMusicDir(dir string) bool {
 	dir = ExpandHome(dir)

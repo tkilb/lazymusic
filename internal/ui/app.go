@@ -148,6 +148,7 @@ func (m *Model) statusBindings() []statusbar.Binding {
 			{Key: "Enter", Label: "open in files"},
 			{Key: "a", Label: "add dir"},
 			{Key: "d", Label: "remove dir"},
+			{Key: "Shift+↑/↓", Label: "reorder"},
 			{Key: "r", Label: "rescan"},
 			{Key: "/", Label: "search"},
 		}
@@ -209,6 +210,8 @@ func (m *Model) helpLocalBindings() []statusbar.Binding {
 			{Key: "Enter", Label: "open selected directory in File Browser"},
 			{Key: "a", Label: "add new music directory to library"},
 			{Key: "d", Label: "remove selected directory from library"},
+			{Key: "Shift+↑", Label: "move selected directory up in order"},
+			{Key: "Shift+↓", Label: "move selected directory down in order"},
 			{Key: "r", Label: "rescan audio files in library"},
 			{Key: "/", Label: "search music directories"},
 		}
@@ -764,7 +767,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		// Shift+Up: Move track up in queue or move playlist up
+		// Shift+Up: Move track up in queue, move playlist up, or move music dir up
 		case "shift+up", "ctrl+shift+up":
 			if m.activePanel == panels.PanelQueue && m.player != nil {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
@@ -777,10 +780,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
 				m.playlistsPanel.MoveUp()
+			} else if m.activePanel == panels.PanelLibrary && m.libraryPanel != nil {
+				m.libraryPanel.MoveUp()
 			}
 			return m, nil
 
-		// Shift+Down: Move track down in queue or move playlist down
+		// Shift+Down: Move track down in queue, move playlist down, or move music dir down
 		case "shift+down", "ctrl+shift+down":
 			if m.activePanel == panels.PanelQueue && m.player != nil {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok {
@@ -793,6 +798,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			} else if m.activePanel == panels.PanelPlaylists && m.playlistsPanel != nil {
 				m.playlistsPanel.MoveDown()
+			} else if m.activePanel == panels.PanelLibrary && m.libraryPanel != nil {
+				m.libraryPanel.MoveDown()
 			}
 			return m, nil
 
@@ -1307,33 +1314,88 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.modalMode = ModalNone
 			m.exportState = newExportState()
-		case "1":
-			m.exportState.namingMode = ExportFlatOriginal
-		case "2":
-			m.exportState.namingMode = ExportNumbered
+
+		case "tab":
+			if m.exportState.focusedField == ExportFieldPath {
+				// If autocomplete suggestions are available and input doesn't already match the selected suggestion,
+				// complete it. Otherwise, tab to the next field (Naming Format).
+				if len(m.exportState.suggestions) > 0 && m.exportState.selectedSugIdx < len(m.exportState.suggestions) {
+					sug := m.exportState.suggestions[m.exportState.selectedSugIdx]
+					if m.exportState.pathInput != sug && m.exportState.pathInput != sug+"/" {
+						m.exportState.pathInput = sug + "/"
+						m.exportState.updateSuggestions()
+						return m, nil
+					}
+				}
+				m.exportState.focusedField = ExportFieldFormat
+			} else {
+				m.exportState.focusedField = ExportFieldPath
+			}
+
+		case "shift+tab":
+			if m.exportState.focusedField == ExportFieldPath {
+				m.exportState.focusedField = ExportFieldFormat
+			} else {
+				m.exportState.focusedField = ExportFieldPath
+			}
+
 		case "up":
-			if len(m.exportState.suggestions) > 0 {
-				if m.exportState.selectedSugIdx > 0 {
+			if m.exportState.focusedField == ExportFieldPath {
+				if len(m.exportState.suggestions) > 0 && m.exportState.selectedSugIdx > 0 {
 					m.exportState.selectedSugIdx--
 				}
+			} else {
+				// On Format field: move up/down toggles format or moves focus
+				m.exportState.namingMode = ExportFlatOriginal
 			}
+
 		case "down":
-			if len(m.exportState.suggestions) > 0 {
-				if m.exportState.selectedSugIdx < len(m.exportState.suggestions)-1 {
+			if m.exportState.focusedField == ExportFieldPath {
+				if len(m.exportState.suggestions) > 0 && m.exportState.selectedSugIdx < len(m.exportState.suggestions)-1 {
 					m.exportState.selectedSugIdx++
 				}
+			} else {
+				m.exportState.namingMode = ExportNumbered
 			}
-		case "tab":
-			if len(m.exportState.suggestions) > 0 && m.exportState.selectedSugIdx < len(m.exportState.suggestions) {
-				m.exportState.pathInput = m.exportState.suggestions[m.exportState.selectedSugIdx] + "/"
+
+		case "right":
+			if m.exportState.focusedField == ExportFieldPath {
+				if len(m.exportState.suggestions) > 0 && m.exportState.selectedSugIdx < len(m.exportState.suggestions) {
+					m.exportState.pathInput = m.exportState.suggestions[m.exportState.selectedSugIdx] + "/"
+					m.exportState.updateSuggestions()
+				}
+			}
+
+		case "space":
+			if m.exportState.focusedField == ExportFieldFormat {
+				if m.exportState.namingMode == ExportFlatOriginal {
+					m.exportState.namingMode = ExportNumbered
+				} else {
+					m.exportState.namingMode = ExportFlatOriginal
+				}
+			} else {
+				m.exportState.pathInput += " "
 				m.exportState.updateSuggestions()
 			}
+
 		case "backspace":
-			if len(m.exportState.pathInput) > 0 {
-				m.exportState.pathInput = m.exportState.pathInput[:len(m.exportState.pathInput)-1]
-				m.exportState.updateSuggestions()
+			if m.exportState.focusedField == ExportFieldPath {
+				if len(m.exportState.pathInput) > 0 {
+					m.exportState.pathInput = m.exportState.pathInput[:len(m.exportState.pathInput)-1]
+					m.exportState.updateSuggestions()
+				}
 			}
+
 		case "enter":
+			if m.exportState.focusedField == ExportFieldPath && len(m.exportState.suggestions) > 0 {
+				// If cursor is on a suggestion and it's not the exact full path, pressing enter completes it
+				selected := m.exportState.suggestions[m.exportState.selectedSugIdx]
+				if m.exportState.pathInput != selected && m.exportState.pathInput != selected+"/" {
+					m.exportState.pathInput = selected + "/"
+					m.exportState.updateSuggestions()
+					return m, nil
+				}
+			}
 			target := strings.TrimSpace(m.exportState.pathInput)
 			if target != "" {
 				if q, ok := m.queuePanel.(*panels.QueuePanel); ok && q.Len() > 0 {
@@ -1342,8 +1404,15 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, m.startExportCmd(target, m.exportState.namingMode, q.Playlist())
 				}
 			}
+
 		default:
-			if len(key) == 1 {
+			if m.exportState.focusedField == ExportFieldFormat {
+				if key == "1" {
+					m.exportState.namingMode = ExportFlatOriginal
+				} else if key == "2" {
+					m.exportState.namingMode = ExportNumbered
+				}
+			} else if len(key) == 1 {
 				m.exportState.pathInput += key
 				m.exportState.updateSuggestions()
 			}

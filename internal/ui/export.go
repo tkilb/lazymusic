@@ -31,8 +31,17 @@ type ExportProgressMsg struct {
 	TargetDir  string
 }
 
+// ExportField identifies which field in the export form currently has focus.
+type ExportField int
+
+const (
+	ExportFieldPath ExportField = iota
+	ExportFieldFormat
+)
+
 // ExportState holds state for the export popup modal.
 type ExportState struct {
+	focusedField   ExportField
 	pathInput      string
 	suggestions    []string
 	selectedSugIdx int
@@ -50,6 +59,7 @@ type ExportState struct {
 
 func newExportState() ExportState {
 	return ExportState{
+		focusedField: ExportFieldPath,
 		pathInput:   "",
 		namingMode:  ExportFlatOriginal,
 		suggestions: nil,
@@ -202,9 +212,8 @@ func copyFile(src, dst string) error {
 }
 
 func renderExportModal(m *Model) string {
-	var body strings.Builder
-
 	if m.exportState.running {
+		var body strings.Builder
 		body.WriteString(" Exporting queue to:\n")
 		body.WriteString(fmt.Sprintf("   %s\n\n", lipgloss.NewStyle().Bold(true).Render(m.exportState.targetDir)))
 		body.WriteString(fmt.Sprintf(" Copying files... please wait.\n"))
@@ -212,6 +221,7 @@ func renderExportModal(m *Model) string {
 	}
 
 	if m.exportState.done {
+		var body strings.Builder
 		if m.exportState.lastErr != nil {
 			body.WriteString(fmt.Sprintf(" Error: %s\n\n", m.exportState.lastErr.Error()))
 			return theme.PopupBox("Export Failed", "<esc> or <enter> to dismiss", body.String(), m.width, theme.PaletteRed)
@@ -221,25 +231,17 @@ func renderExportModal(m *Model) string {
 		return theme.PopupBox("Export Complete", "<esc> or <enter> to dismiss", body.String(), m.width, theme.PaletteGreen)
 	}
 
-	// 1. Target Directory prompt
-	body.WriteString(" Destination Directory:\n")
-	body.WriteString("   " + m.exportState.pathInput + "█\n\n")
-
-	// 2. Naming format choice
-	mode1 := "(•) 1. Flat original: Song.mp3 (Default)"
-	mode2 := "( ) 2. Numbered: 01 - Song.mp3"
-	if m.exportState.namingMode == ExportNumbered {
-		mode1 = "( ) 1. Flat original: Song.mp3 (Default)"
-		mode2 = "(•) 2. Numbered: 01 - Song.mp3"
+	// Field 1: Destination Directory
+	cursor := ""
+	if m.exportState.focusedField == ExportFieldPath {
+		cursor = "█"
 	}
-	body.WriteString(" Naming Format (press 1 or 2 to toggle):\n")
-	body.WriteString("   " + mode1 + "\n")
-	body.WriteString("   " + mode2 + "\n\n")
+	var dirContent strings.Builder
+	dirContent.WriteString(" " + m.exportState.pathInput + cursor)
 
-	// 3. Autocomplete suggestions
 	if len(m.exportState.suggestions) > 0 {
-		body.WriteString(lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" Matching directories (<tab> / <up/down> to select):") + "\n")
-		visibleMax := 5
+		dirContent.WriteString("\n\n" + lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" Matching directories (<tab> / <up/down> to select):") + "\n")
+		visibleMax := 4
 		startIdx := 0
 		if m.exportState.selectedSugIdx >= visibleMax {
 			startIdx = m.exportState.selectedSugIdx - visibleMax + 1
@@ -248,17 +250,46 @@ func renderExportModal(m *Model) string {
 
 		for i := startIdx; i < endIdx; i++ {
 			sug := m.exportState.suggestions[i]
-			cursor := "   "
+			itemCursor := "   "
 			style := lipgloss.NewStyle()
-			if i == m.exportState.selectedSugIdx {
-				cursor = " > "
+			if i == m.exportState.selectedSugIdx && m.exportState.focusedField == ExportFieldPath {
+				itemCursor = " > "
 				style = theme.CursorRowStyle
 			}
-			body.WriteString(fmt.Sprintf("%s%s\n", cursor, style.Render(sug)))
+			dirContent.WriteString(fmt.Sprintf("%s%s\n", itemCursor, style.Render(sug)))
 		}
 	} else if strings.TrimSpace(m.exportState.pathInput) != "" {
-		body.WriteString(lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" (Directory will be created if it does not exist)") + "\n")
+		dirContent.WriteString("\n" + lipgloss.NewStyle().Foreground(theme.PaletteDim).Render(" (Directory will be created if it does not exist)"))
 	}
 
-	return theme.PopupBox("Export Queue Tracks", "<tab> complete, <enter> export, <esc> cancel", body.String(), m.width)
+	pathHint := ""
+	if m.exportState.focusedField == ExportFieldPath {
+		if len(m.exportState.suggestions) > 0 {
+			pathHint = "<tab> complete"
+		}
+	}
+	pathBox := theme.FieldBox("Destination Directory", pathHint, dirContent.String(), m.exportState.focusedField == ExportFieldPath, m.width)
+
+	// Field 2: Naming Format
+	mode1 := "(•) 1. Flat original: Song.mp3 (Default)"
+	mode2 := "( ) 2. Numbered: 01 - Song.mp3"
+	if m.exportState.namingMode == ExportNumbered {
+		mode1 = "( ) 1. Flat original: Song.mp3 (Default)"
+		mode2 = "(•) 2. Numbered: 01 - Song.mp3"
+	}
+
+	var formatContent strings.Builder
+	if m.exportState.focusedField == ExportFieldFormat {
+		if m.exportState.namingMode == ExportFlatOriginal {
+			mode1 = theme.CursorRowStyle.Render(mode1)
+		} else {
+			mode2 = theme.CursorRowStyle.Render(mode2)
+		}
+	}
+	formatContent.WriteString(" " + mode1 + "\n")
+	formatContent.WriteString(" " + mode2)
+
+	formatBox := theme.FieldBox("Naming Format", "<tab> next, <enter> export, <esc> cancel", formatContent.String(), m.exportState.focusedField == ExportFieldFormat, m.width)
+
+	return strings.Join([]string{pathBox, formatBox}, "\n")
 }
